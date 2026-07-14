@@ -94,12 +94,31 @@ describe("MessageItem composition", () => {
       resolve(process.cwd(), "src/app/globals.css"),
       "utf8",
     );
+    const messageOutputRenderer = readFileSync(
+      resolve(
+        process.cwd(),
+        "src/components/content/MessageOutputRenderer.tsx",
+      ),
+      "utf8",
+    );
     const packageJson = JSON.parse(
       readFileSync(resolve(process.cwd(), "package.json"), "utf8"),
     ) as { dependencies?: Record<string, string> };
 
     expect(messageItem).toContain("handleDownloadMarkdown");
     expect(messageItem).toContain("handleDownloadPdf");
+    expect(messageItem).toContain("beginDownload");
+    expect(messageItem).toContain("finishDownload");
+    expect(messageItem).toContain("downloadingFormat");
+    expect(messageItem).toContain('t("downloadInProgress")');
+    expect(messageItem).toContain("aria-busy={isDownloading}");
+    expect(messageItem).toContain("disabled={isDownloading}");
+    expect(messageItem).toContain("hideReasoning");
+    expect(messageItem).toContain("hideToolCalls");
+    expect(messageOutputRenderer).toContain("hideReasoning?: boolean");
+    expect(messageOutputRenderer).toContain("hideToolCalls?: boolean");
+    expect(messageOutputRenderer).toContain("if (hideReasoning) return null;");
+    expect(messageOutputRenderer).toContain("if (hideToolCalls) return null;");
     expect(messageItem).toContain("handleDownloadImage");
     expect(messageItem).toContain("imageExportError");
     expect(messageItem).toContain('t("downloadImageFailed")');
@@ -115,6 +134,8 @@ describe("MessageItem composition", () => {
     expect(messageItem).toContain("backgroundColor");
     expect(messageItem).toContain("getImageExportBackgroundColor");
     expect(messageItem).toContain("getMessageImageExportWidth");
+    expect(messageItem).toContain("cacheBust: false");
+    expect(messageItem).not.toContain("cacheBust: true");
     expect(messageItem).toContain("visibleMessageContentRef");
     expect(messageItem).toContain("width: imageExportJob.width");
     expect(messageItem).toContain("canvasWidth: imageExportJob.width");
@@ -129,6 +150,17 @@ describe("MessageItem composition", () => {
     expect(messageItem).toContain("URL.revokeObjectURL");
     expect(messageItem).not.toContain("serveproxy.com");
     expect(messageItem).toContain("waitForMessageExportImages");
+    const runExportStart = messageItem.indexOf(
+      "const runExport = async () => {",
+    );
+    const runExportEnd = messageItem.indexOf(
+      "firstFrame = requestAnimationFrame",
+      runExportStart,
+    );
+    const runExport = messageItem.slice(runExportStart, runExportEnd);
+    expect(runExport.indexOf("await proxyMessageExportImages")).toBeLessThan(
+      runExport.indexOf("await exportRootToPng"),
+    );
     expect(messageItem).toContain("DropdownMenuSub");
     expect(messageItem).toContain("DropdownMenuSubTrigger");
     expect(messageItem).toContain("DropdownMenuSubContent");
@@ -191,10 +223,12 @@ describe("MessageItem composition", () => {
     expect(en.Message.downloadMarkdown).toBe("Markdown");
     expect(en.Message.downloadPdf).toBe("PDF");
     expect(en.Message.downloadImage).toBe("Image");
+    expect(en.Message.downloadInProgress).toBe("Downloading…");
     expect(en.Message.downloadFormat).toBe("Download format");
     expect(zh.Message.downloadMarkdown).toBe("Markdown");
     expect(zh.Message.downloadPdf).toBe("PDF");
     expect(zh.Message.downloadImage).toBe("图片");
+    expect(zh.Message.downloadInProgress).toBe("下载中…");
     expect(zh.Message.downloadFormat).toBe("下载格式");
   });
 });

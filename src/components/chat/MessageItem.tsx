@@ -104,6 +104,7 @@ interface MessageItemProps {
 }
 
 type CopyStatus = "idle" | "copied" | "error";
+type MessageDownloadFormat = "markdown" | "pdf" | "image";
 
 interface ReadableAttachmentDocument {
   name: string;
@@ -241,7 +242,6 @@ const proxyMessageExportImages = async (
   root: HTMLElement,
   signal: AbortSignal,
 ) => {
-  let didProxy = false;
   const objectUrls: string[] = [];
   const images = Array.from(root.querySelectorAll<HTMLImageElement>("img"));
 
@@ -264,8 +264,8 @@ const proxyMessageExportImages = async (
 
       const objectUrl = URL.createObjectURL(await response.blob());
       objectUrls.push(objectUrl);
+      image.srcset = "";
       image.src = objectUrl;
-      didProxy = true;
     }
   } catch (error) {
     objectUrls.forEach((objectUrl) => URL.revokeObjectURL(objectUrl));
@@ -273,7 +273,6 @@ const proxyMessageExportImages = async (
   }
 
   return {
-    didProxy,
     cleanup: () => {
       objectUrls.forEach((objectUrl) => URL.revokeObjectURL(objectUrl));
     },
@@ -325,6 +324,8 @@ const MessageItem: React.FC<MessageItemProps> = ({
   const [imageExportJob, setImageExportJob] = useState<ImageExportJob | null>(
     null,
   );
+  const [downloadingFormat, setDownloadingFormat] =
+    useState<MessageDownloadFormat | null>(null);
   const [imageExportError, setImageExportError] = useState<string | null>(null);
 
   // Immersive / Reading Mode State
@@ -360,6 +361,8 @@ const MessageItem: React.FC<MessageItemProps> = ({
   const readingDialogRef = useRef<HTMLDivElement>(null);
   const imageExportRootRef = useRef<HTMLDivElement>(null);
   const visibleMessageContentRef = useRef<HTMLDivElement>(null);
+  const downloadLockRef = useRef<MessageDownloadFormat | null>(null);
+  const downloadResetTimerRef = useRef<number | null>(null);
   const readingRestoreFocusRef = useRef<HTMLElement | null>(null);
   const readingDialogTitleId = useId();
   const readingDialogDescriptionId = useId();
@@ -370,6 +373,21 @@ const MessageItem: React.FC<MessageItemProps> = ({
     useChatStore();
   const { openImagePreview } = useUIStore();
   const { voice } = useSettingsStore();
+
+  const beginDownload = useCallback((format: MessageDownloadFormat) => {
+    if (downloadLockRef.current) return false;
+    downloadLockRef.current = format;
+    setDownloadingFormat(format);
+    return true;
+  }, []);
+
+  const finishDownload = useCallback((format: MessageDownloadFormat) => {
+    if (downloadLockRef.current !== format) return;
+    downloadLockRef.current = null;
+    setDownloadingFormat(null);
+  }, []);
+
+  const isDownloading = downloadingFormat !== null;
 
   const stopCurrentAudio = () => {
     currentAudioRef.current?.dispose();
@@ -491,6 +509,11 @@ const MessageItem: React.FC<MessageItemProps> = ({
       copyStatusResetRef.current?.dispose();
       readerCopyStatusResetRef.current?.dispose();
       clearDeleteConfirmTimer();
+      if (downloadResetTimerRef.current !== null) {
+        window.clearTimeout(downloadResetTimerRef.current);
+        downloadResetTimerRef.current = null;
+      }
+      downloadLockRef.current = null;
       stopCurrentAudio();
       // Also stop browser synthesis if running
       if (window.speechSynthesis) {
@@ -535,6 +558,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
         cleanupTimer = null;
       }
       restoreDocumentTitle();
+      finishDownload("pdf");
       setPdfPrintJob((current) =>
         current?.id === pdfPrintJob.id ? null : current,
       );
@@ -557,9 +581,10 @@ const MessageItem: React.FC<MessageItemProps> = ({
       if (!cleanedUp) {
         cleanedUp = true;
         restoreDocumentTitle();
+        finishDownload("pdf");
       }
     };
-  }, [pdfPrintJob]);
+  }, [finishDownload, pdfPrintJob]);
 
   useEffect(() => {
     if (!imageExportJob) return;
@@ -580,6 +605,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
     };
 
     const cleanupImageExportJob = () => {
+      finishDownload("image");
       setImageExportJob((current) =>
         current?.id === imageExportJob.id ? null : current,
       );
@@ -588,7 +614,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
     const exportRootToPng = async (root: HTMLElement) => {
       const backgroundColor = getImageExportBackgroundColor(root);
       return toPng(root, {
-        cacheBust: true,
+        cacheBust: false,
         backgroundColor,
         width: imageExportJob.width,
         canvasWidth: imageExportJob.width,
@@ -607,32 +633,18 @@ const MessageItem: React.FC<MessageItemProps> = ({
       }
 
       try {
+        const proxyResult = await proxyMessageExportImages(
+          root,
+          proxyController.signal,
+        );
+        cleanupProxiedImages = proxyResult.cleanup;
         await waitForMessageExportImages(root);
         const dataUrl = await exportRootToPng(root);
         if (!cancelled) downloadImageDataUrl(dataUrl);
-      } catch (firstError) {
-        if (cancelled) return;
-
-        try {
-          const proxyResult = await proxyMessageExportImages(
-            root,
-            proxyController.signal,
-          );
-          cleanupProxiedImages = proxyResult.cleanup;
-          if (!proxyResult.didProxy) {
-            logMessageItemError("Failed to export message image", firstError);
-            setImageExportError(t("downloadImageFailed"));
-            return;
-          }
-
-          await waitForMessageExportImages(root);
-          const dataUrl = await exportRootToPng(root);
-          if (!cancelled) downloadImageDataUrl(dataUrl);
-        } catch (retryError) {
-          if (!cancelled) {
-            logMessageItemError("Failed to export message image", retryError);
-            setImageExportError(t("downloadImageFailed"));
-          }
+      } catch (error) {
+        if (!cancelled) {
+          logMessageItemError("Failed to export message image", error);
+          setImageExportError(t("downloadImageFailed"));
         }
       } finally {
         cleanupProxiedImages();
@@ -649,10 +661,11 @@ const MessageItem: React.FC<MessageItemProps> = ({
     return () => {
       cancelled = true;
       proxyController.abort();
+      finishDownload("image");
       if (firstFrame !== null) cancelAnimationFrame(firstFrame);
       if (secondFrame !== null) cancelAnimationFrame(secondFrame);
     };
-  }, [imageExportJob, t]);
+  }, [finishDownload, imageExportJob, t]);
 
   // Typewriter Effect Logic using requestAnimationFrame
   useEffect(() => {
@@ -734,19 +747,32 @@ const MessageItem: React.FC<MessageItemProps> = ({
     );
 
   const handleDownloadMarkdown = () => {
-    const blob = new Blob([message.content], { type: "text/markdown" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = getMessageDownloadName("md");
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    setShowMoreMenu(false);
+    if (!beginDownload("markdown")) return;
+
+    try {
+      const blob = new Blob([message.content], { type: "text/markdown" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = getMessageDownloadName("md");
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } finally {
+      setShowMoreMenu(false);
+      if (downloadResetTimerRef.current !== null) {
+        window.clearTimeout(downloadResetTimerRef.current);
+      }
+      downloadResetTimerRef.current = window.setTimeout(() => {
+        downloadResetTimerRef.current = null;
+        finishDownload("markdown");
+      }, 250);
+    }
   };
 
   const handleDownloadPdf = () => {
+    if (!beginDownload("pdf")) return;
     setPdfPrintJob({
       id: `${message.id}-${Date.now()}`,
       title: getMessageDownloadName("pdf"),
@@ -757,6 +783,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
   };
 
   const handleDownloadImage = () => {
+    if (!beginDownload("image")) return;
     setImageExportError(null);
     setImageExportJob({
       id: `${message.id}-${Date.now()}`,
@@ -1191,6 +1218,8 @@ const MessageItem: React.FC<MessageItemProps> = ({
                   displayedContent={imageExportJob.message.content}
                   searchSources={imageExportJob.searchSources}
                   forceExpandCodeBlocks
+                  hideReasoning
+                  hideToolCalls
                 />
               </div>
             </div>
@@ -1711,19 +1740,43 @@ const MessageItem: React.FC<MessageItemProps> = ({
                     />
                     <div className="hidden! md:flex!">
                       <DropdownMenu>
-                        <Tooltip content={t("download")} position="top">
+                        <Tooltip
+                          content={
+                            isDownloading
+                              ? t("downloadInProgress")
+                              : t("download")
+                          }
+                          position="top"
+                        >
                           <DropdownMenuTrigger asChild>
                             <button
                               type="button"
-                              aria-label={t("downloadFormat")}
+                              aria-label={
+                                isDownloading
+                                  ? t("downloadInProgress")
+                                  : t("downloadFormat")
+                              }
+                              aria-busy={isDownloading}
+                              disabled={isDownloading}
                               className={`p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-muted hover:text-gray-700 dark:hover:text-foreground/85 transition-[background-color,border-color,color,opacity] relative group/btn border border-transparent hover:border-white/50 dark:hover:border-border flex items-center justify-center ${actionButtonFocusClass}`}
                             >
-                              <Download size={13} aria-hidden="true" />
+                              {isDownloading ? (
+                                <Loader2
+                                  size={13}
+                                  className="animate-spin"
+                                  aria-hidden="true"
+                                />
+                              ) : (
+                                <Download size={13} aria-hidden="true" />
+                              )}
                             </button>
                           </DropdownMenuTrigger>
                         </Tooltip>
                         <DropdownMenuContent side="top" align="end">
-                          <DropdownMenuItem onSelect={handleDownloadMarkdown}>
+                          <DropdownMenuItem
+                            disabled={isDownloading}
+                            onSelect={handleDownloadMarkdown}
+                          >
                             <FileText
                               size={14}
                               className="text-gray-500 dark:text-muted-foreground"
@@ -1731,7 +1784,10 @@ const MessageItem: React.FC<MessageItemProps> = ({
                             />
                             <span>{t("downloadMarkdown")}</span>
                           </DropdownMenuItem>
-                          <DropdownMenuItem onSelect={handleDownloadPdf}>
+                          <DropdownMenuItem
+                            disabled={isDownloading}
+                            onSelect={handleDownloadPdf}
+                          >
                             <Signature
                               size={14}
                               className="text-gray-500 dark:text-muted-foreground"
@@ -1739,7 +1795,10 @@ const MessageItem: React.FC<MessageItemProps> = ({
                             />
                             <span>{t("downloadPdf")}</span>
                           </DropdownMenuItem>
-                          <DropdownMenuItem onSelect={handleDownloadImage}>
+                          <DropdownMenuItem
+                            disabled={isDownloading}
+                            onSelect={handleDownloadImage}
+                          >
                             <FileImage
                               size={14}
                               className="text-gray-500 dark:text-muted-foreground"
@@ -1785,18 +1844,33 @@ const MessageItem: React.FC<MessageItemProps> = ({
                         setShowMoreMenu(open);
                       }}
                     >
-                      <Tooltip content={t("more")} position="top">
+                      <Tooltip
+                        content={
+                          isDownloading ? t("downloadInProgress") : t("more")
+                        }
+                        position="top"
+                      >
                         <DropdownMenuTrigger asChild>
                           <button
                             type="button"
                             aria-label={t("more")}
+                            aria-busy={isDownloading}
+                            disabled={isDownloading}
                             className={`p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-muted hover:text-gray-700 dark:hover:text-foreground/85 transition-[background-color,border-color,color,opacity] relative group/btn border border-transparent hover:border-white/50 dark:hover:border-border flex items-center justify-center ${actionButtonFocusClass} ${
                               showMoreMenu
                                 ? "bg-gray-100 dark:bg-muted text-gray-700 dark:text-foreground/85"
                                 : ""
                             }`}
                           >
-                            <MoreHorizontal size={13} aria-hidden="true" />
+                            {isDownloading ? (
+                              <Loader2
+                                size={13}
+                                className="animate-spin"
+                                aria-hidden="true"
+                              />
+                            ) : (
+                              <MoreHorizontal size={13} aria-hidden="true" />
+                            )}
                           </button>
                         </DropdownMenuTrigger>
                       </Tooltip>
@@ -1831,16 +1905,31 @@ const MessageItem: React.FC<MessageItemProps> = ({
                         </DropdownMenuItem>
 
                         <DropdownMenuSub>
-                          <DropdownMenuSubTrigger>
-                            <Download
-                              size={14}
-                              className="text-gray-500 dark:text-muted-foreground"
-                              aria-hidden="true"
-                            />
-                            <span>{t("download")}</span>
+                          <DropdownMenuSubTrigger disabled={isDownloading}>
+                            {isDownloading ? (
+                              <Loader2
+                                size={14}
+                                className="animate-spin text-gray-500 dark:text-muted-foreground"
+                                aria-hidden="true"
+                              />
+                            ) : (
+                              <Download
+                                size={14}
+                                className="text-gray-500 dark:text-muted-foreground"
+                                aria-hidden="true"
+                              />
+                            )}
+                            <span>
+                              {isDownloading
+                                ? t("downloadInProgress")
+                                : t("download")}
+                            </span>
                           </DropdownMenuSubTrigger>
                           <DropdownMenuSubContent>
-                            <DropdownMenuItem onSelect={handleDownloadMarkdown}>
+                            <DropdownMenuItem
+                              disabled={isDownloading}
+                              onSelect={handleDownloadMarkdown}
+                            >
                               <FileText
                                 size={14}
                                 className="text-gray-500 dark:text-muted-foreground"
@@ -1848,7 +1937,10 @@ const MessageItem: React.FC<MessageItemProps> = ({
                               />
                               <span>{t("downloadMarkdown")}</span>
                             </DropdownMenuItem>
-                            <DropdownMenuItem onSelect={handleDownloadPdf}>
+                            <DropdownMenuItem
+                              disabled={isDownloading}
+                              onSelect={handleDownloadPdf}
+                            >
                               <Signature
                                 size={14}
                                 className="text-gray-500 dark:text-muted-foreground"
@@ -1856,7 +1948,10 @@ const MessageItem: React.FC<MessageItemProps> = ({
                               />
                               <span>{t("downloadPdf")}</span>
                             </DropdownMenuItem>
-                            <DropdownMenuItem onSelect={handleDownloadImage}>
+                            <DropdownMenuItem
+                              disabled={isDownloading}
+                              onSelect={handleDownloadImage}
+                            >
                               <FileImage
                                 size={14}
                                 className="text-gray-500 dark:text-muted-foreground"
