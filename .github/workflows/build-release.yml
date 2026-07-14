@@ -1,0 +1,90 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "public/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "next.config.ts"
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: "20"
+  PNPM_VERSION: "10.30.3"
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Install dependencies
+        run: corepack pnpm install --frozen-lockfile
+
+      - name: Build
+        env:
+          NEXT_PUBLIC_SITE_URL: "https://ai.nho.cc"
+          NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL }}
+        run: corepack pnpm build
+
+      - name: Assemble deploy directory
+        run: |
+          set -eux
+          mkdir -p deploy
+          cp -r .next/standalone/. deploy/
+          mkdir -p deploy/.next
+          cp -r .next/static deploy/.next/static
+          cp -r public deploy/public
+          # Print tree summary for log visibility
+          du -sh deploy
+          find deploy -maxdepth 2 -type d | sort
+
+      - name: Compress deploy directory
+        run: |
+          tar -czf neo-chat-deploy.tar.gz deploy
+          zip -rq neo-chat-deploy.zip deploy
+          ls -lh neo-chat-deploy.tar.gz neo-chat-deploy.zip
+
+      - name: Publish as the latest release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest Build
+          body: |
+            Auto-generated release from commit ${{ github.sha }}.
+
+            ### Contents
+            - `neo-chat-deploy.tar.gz` — gzip tarball of the standalone build
+            - `neo-chat-deploy.zip` — zip archive of the standalone build
+
+            ### Run
+            ```bash
+            tar -xzf neo-chat-deploy.tar.gz
+            cd deploy
+            node server.js
+            ```
+            Open http://localhost:3000
+          files: |
+            neo-chat-deploy.tar.gz
+            neo-chat-deploy.zip
+          make_latest: true
+          prerelease: false
