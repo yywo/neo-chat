@@ -778,12 +778,12 @@ const MessageItem: React.FC<MessageItemProps> = ({
     setShowMoreMenu(false);
   };
 
-  const handleFileClick = (file: MarkdownGeneratedFile) => {
+  const handleFileClick = useCallback((file: MarkdownGeneratedFile) => {
     setFileToRead(normalizeMarkdownGeneratedFile(file));
     setAttachmentToRead(null);
     setReaderCopyStatus("idle");
     setReadingMode("file");
-  };
+  }, []);
 
   const handleDocumentAttachmentClick = (attachment: Attachment) => {
     if (!attachment.data || !isTextDocumentMimeType(attachment.mimeType))
@@ -991,7 +991,12 @@ const MessageItem: React.FC<MessageItemProps> = ({
   });
 
   // Search Data from Message
-  const sources = message.searchSources || [];
+  // Keep the reference stable across renders when there are no search sources
+  // so downstream memoized renderers do not recompute on every streaming chunk.
+  const sources = useMemo(
+    () => message.searchSources || [],
+    [message.searchSources],
+  );
 
   // RAG Data
   const ragSources = message.ragSources || [];
@@ -1028,14 +1033,36 @@ const MessageItem: React.FC<MessageItemProps> = ({
     openImagePreview(previewImages, newIndex);
   };
 
+  // Read the freshest message from the store inside these callbacks so the
+  // callbacks can stay referentially stable across streaming renders. The
+  // previous versions depended on `message.attachments` / `message.outputBlocks`
+  // which get new array references on every chunk; that churn cascaded into
+  // `useAttachmentDisplayUrl` effects re-running and writing back into the
+  // store, looping until React bailed out with error #185.
+  const getCurrentMessage = useCallback(
+    () =>
+      useChatStore
+        .getState()
+        .activeMessages.find((item) => item.id === message.id),
+    [message.id],
+  );
+
   const persistCachedMessageAttachments = useCallback(
     (cachedAttachment: Attachment) => {
-      const sessionId = getCurrentSession()?.id;
-      if (!sessionId || !message.attachments?.length) return;
+      const sessionId = useChatStore.getState().currentSessionId;
+      if (!sessionId) return;
+      const current = getCurrentMessage();
+      if (!current?.attachments?.length) return;
 
       let changed = false;
-      const attachments = message.attachments.map((attachment) => {
-        if (attachment.id !== cachedAttachment.id) return attachment;
+      const attachments = current.attachments.map((attachment) => {
+        if (
+          attachment.id !== cachedAttachment.id ||
+          attachment.displayCache?.sourceFingerprint ===
+            cachedAttachment.displayCache?.sourceFingerprint
+        ) {
+          return attachment;
+        }
         changed = true;
         return cachedAttachment;
       });
@@ -1043,17 +1070,24 @@ const MessageItem: React.FC<MessageItemProps> = ({
 
       updateMessage(sessionId, message.id, { attachments });
     },
-    [getCurrentSession, message.attachments, message.id, updateMessage],
+    [getCurrentMessage, message.id, updateMessage],
   );
 
   const persistCachedOutputImage = useCallback(
     (cachedImage: Attachment) => {
-      const sessionId = getCurrentSession()?.id;
-      if (!sessionId || !message.outputBlocks?.length) return;
+      const sessionId = useChatStore.getState().currentSessionId;
+      if (!sessionId) return;
+      const current = getCurrentMessage();
+      if (!current?.outputBlocks?.length) return;
 
       let changed = false;
-      const outputBlocks = message.outputBlocks.map((block) => {
-        if (block.type !== "image" || block.image.id !== cachedImage.id) {
+      const outputBlocks = current.outputBlocks.map((block) => {
+        if (
+          block.type !== "image" ||
+          block.image.id !== cachedImage.id ||
+          block.image.displayCache?.sourceFingerprint ===
+            cachedImage.displayCache?.sourceFingerprint
+        ) {
           return block;
         }
         changed = true;
@@ -1063,7 +1097,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
 
       updateMessage(sessionId, message.id, { outputBlocks });
     },
-    [getCurrentSession, message.id, message.outputBlocks, updateMessage],
+    [getCurrentMessage, message.id, updateMessage],
   );
 
   const handleReadingDialogKeyDown = (
