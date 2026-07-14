@@ -34,6 +34,38 @@ describe("context budget planning", () => {
     expect(budget.totalAllocatedTokens).toBeLessThanOrEqual(7_000);
   });
 
+  it("caps reserved output tokens so models with output >= context still get input budget", () => {
+    const budget = allocateContextBudget({
+      modelInputTokenLimit: 4_096,
+      reservedOutputTokens: 32_768,
+      sources: {},
+    });
+
+    expect(budget.totalAvailableTokens).toBeGreaterThan(0);
+    expect(budget.totalAvailableTokens).toBeLessThanOrEqual(4_096);
+    expect(budget.totalAvailableTokens).toBeGreaterThanOrEqual(2_048);
+  });
+
+  it("uses the default context limit when metadata context is missing but output is large", () => {
+    const budget = allocateContextBudget({
+      reservedOutputTokens: 64_000,
+      sources: {},
+    });
+
+    expect(budget.totalAvailableTokens).toBeGreaterThan(0);
+    expect(budget.totalAvailableTokens).toBeLessThanOrEqual(32_000);
+  });
+
+  it("does not over-reserve when output is much smaller than context", () => {
+    const budget = allocateContextBudget({
+      modelInputTokenLimit: 128_000,
+      reservedOutputTokens: 16_000,
+      sources: {},
+    });
+
+    expect(budget.totalAvailableTokens).toBe(128_000 - 16_000);
+  });
+
   it("trims text to an estimated token budget without splitting below zero", () => {
     expect(trimTextToEstimatedTokens("abcdefghij", 2)).toBe("abcdefgh");
     expect(trimTextToEstimatedTokens("abcdefghij", 0)).toBe("");
