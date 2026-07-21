@@ -23,7 +23,7 @@ jobs:
           version: 10.30.3
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -51,6 +51,12 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: End-to-end smoke tests
+        run: pnpm test:e2e
 
       - name: Build Cloudflare Worker
         run: pnpm build:worker
