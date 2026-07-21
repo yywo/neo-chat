@@ -42,7 +42,7 @@ jobs:
 
       - name: Build
         env:
-          NEXT_PUBLIC_SITE_URL: "http://127.0.0.1:8000"
+          NEXT_PUBLIC_SITE_URL: "http://15.235.188.158:8000"
           NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL }}
         run: corepack pnpm build
 
