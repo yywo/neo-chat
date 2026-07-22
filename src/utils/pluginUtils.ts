@@ -1,5 +1,5 @@
+import { UNSPLASH_PLUGIN, getPluginById } from "../config/plugins";
 import { useSettingsStore } from "../store/core/settingsStore";
-import { UNSPLASH_PLUGIN } from "../config/plugins";
 import {
   getPluginFunctionNameCollisions,
   resolvePluginFunction,
@@ -188,7 +188,7 @@ export const executePluginFunction = async (
   }
 
   const { plugin: foundPlugin, functionDef: foundFn } = resolved;
-  if (expectedContract) {
+  if (expectedContract && !getPluginById(foundPlugin.id)) {
     const currentFingerprint = await createPluginFunctionFingerprint(
       foundPlugin,
       foundFn,
