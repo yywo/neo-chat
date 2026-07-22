@@ -7,7 +7,11 @@ import {
   getRuntimeMaxAttachmentFileBytes,
 } from "@/config/limits";
 import { DEFAULT_SYSTEM_SETTINGS } from "@/config/defaults";
-import { normalizeProviderModelId } from "../providers/models";
+import { CACHE_DURATIONS } from "@/config/api";
+import {
+  extractProviderModelIds,
+  normalizeProviderModelId,
+} from "../providers/models";
 import { normalizeSystemSettings } from "../settings/appConfig";
 import type {
   DefaultModels,
@@ -25,9 +29,19 @@ import {
   PublicDeploymentStoreState,
   SERVER_DEFAULT_PROVIDER_ID,
 } from "./shared";
-import { normalizeProviderTypeValue } from "../providers/providerTypes";
+import {
+  isOpenAIProviderType,
+  normalizeProviderTypeValue,
+} from "../providers/providerTypes";
 import { normalizeModelMetadata } from "../providers/metadata";
 import { getDeploymentMode } from "../security/deployment";
+import { safeFetchJson } from "../security/safeFetch";
+import {
+  getProviderApiKey,
+  getProviderModelsUrl,
+  getSafeUrlPolicy,
+} from "../security/urlPolicy";
+import { safeServerLogError } from "../utils/safeServerLog";
 import {
   DEFAULT_ELEVENLABS_TTS_MODEL,
   isElevenLabsSTTModel,
@@ -192,7 +206,9 @@ function modelMetadataFromEnvObject(
   );
 }
 
-function getDefaultProviderModels(): {
+function getDefaultProviderModels(
+  providerType: ProviderType | undefined,
+): {
   models: string[];
   modelMetadata: Record<string, ModelMetadata>;
 } {
@@ -203,11 +219,21 @@ function getDefaultProviderModels(): {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return { models: envList("DEFAULT_PROVIDER_MODELS"), modelMetadata: {} };
+    return {
+      models: isOpenAIProviderType(providerType)
+        ? []
+        : envList("DEFAULT_PROVIDER_MODELS"),
+      modelMetadata: {},
+    };
   }
 
   if (!Array.isArray(parsed)) {
-    return { models: envList("DEFAULT_PROVIDER_MODELS"), modelMetadata: {} };
+    return {
+      models: isOpenAIProviderType(providerType)
+        ? []
+        : envList("DEFAULT_PROVIDER_MODELS"),
+      modelMetadata: {},
+    };
   }
 
   const models: string[] = [];
@@ -235,7 +261,10 @@ function getDefaultProviderModels(): {
     }
   }
 
-  return { models, modelMetadata };
+  return {
+    models: isOpenAIProviderType(providerType) ? [] : models,
+    modelMetadata,
+  };
 }
 
 function envBool(name: string): boolean | undefined {
@@ -539,9 +568,60 @@ function getPublicStoreState(
   return "memory";
 }
 
+const SERVER_DEFAULT_MODELS_CACHE_TTL = CACHE_DURATIONS.short;
+let cachedServerDefaultModels: {
+  models: string[];
+  timestamp: number;
+} | null = null;
+
+export async function fetchServerDefaultProviderModels(): Promise<string[]> {
+  const provider = getDefaultProviderRuntimeConfig();
+  if (!provider || !isOpenAIProviderType(provider.type)) return [];
+
+  const now = Date.now();
+  if (
+    cachedServerDefaultModels &&
+    now - cachedServerDefaultModels.timestamp < SERVER_DEFAULT_MODELS_CACHE_TTL
+  ) {
+    return cachedServerDefaultModels.models;
+  }
+
+  const apiKey = getProviderApiKey(provider);
+  if (!apiKey) return cachedServerDefaultModels?.models ?? [];
+
+  const endpoint = getProviderModelsUrl(provider.baseUrl, provider.type);
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${apiKey}`,
+  };
+
+  try {
+    const { response, data } = await safeFetchJson<any>(endpoint, {
+      method: "GET",
+      headers,
+    }, {
+      policy: getSafeUrlPolicy("provider"),
+      timeoutMs: 20_000,
+      maxResponseBytes: 4 * 1024 * 1024,
+    });
+
+    if (!response.ok) {
+      return cachedServerDefaultModels?.models ?? [];
+    }
+
+    const models = extractProviderModelIds(provider.type, data);
+    cachedServerDefaultModels = { models, timestamp: now };
+    return models;
+  } catch (error) {
+    safeServerLogError("Failed to fetch server default provider models:", error);
+    return cachedServerDefaultModels?.models ?? [];
+  }
+}
+
 export function getPublicServerConfig(): PublicServerConfig {
   const defaultProvider = getDefaultProviderRuntimeConfig();
-  const defaultProviderModels = getDefaultProviderModels();
+  const defaultProviderModels = getDefaultProviderModels(
+    defaultProvider?.type,
+  );
   const rag = getDefaultRagRuntimeConfig();
   const documentProcessingProvider = getDefaultDocumentParseProvider();
   const documentProcessingAvailable = isDefaultDocumentProcessingAvailable(

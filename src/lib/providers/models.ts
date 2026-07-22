@@ -1,6 +1,6 @@
 import { PROVIDER_MODEL_LIMITS } from "@/config/limits";
 import type { ProviderType } from "@/types";
-import { isGoogleProviderType } from "./providerTypes";
+import { isOpenAIProviderType, isGoogleProviderType } from "./providerTypes";
 
 export function normalizeProviderModelId(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -39,6 +39,10 @@ export function extractProviderModelIds(
     result.push(modelId);
 
     if (result.length >= PROVIDER_MODEL_LIMITS.maxModels) break;
+  }
+
+  if (isOpenAIProviderType(providerType)) {
+    result.sort();
   }
 
   return result;

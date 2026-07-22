@@ -197,7 +197,7 @@ describe("server default configuration", () => {
       id: "SERVER_DEFAULT",
       name: "Hosted Default",
       type: "OpenAI",
-      models: ["gpt-4o", "gpt-4o-mini"],
+      models: [],
       defaultModels: { titleGeneration: "gpt-4o-mini" },
     });
     expect(config.search.available).toBe(true);
@@ -404,7 +404,7 @@ describe("server default configuration", () => {
     const config = getPublicServerConfig();
     const serialized = JSON.stringify(config);
 
-    expect(config.modelProvider.models).toEqual(["gpt-4o-mini", "gpt-4o"]);
+    expect(config.modelProvider.models).toEqual([]);
     expect(config.modelProvider.modelMetadata).toEqual({
       "gpt-4o": {
         id: "gpt-4o",
@@ -458,11 +458,7 @@ describe("server default configuration", () => {
       await import("../lib/defaultConfig/server");
     const config = getPublicServerConfig();
 
-    expect(config.modelProvider.models).toEqual([
-      "gpt-5.5",
-      "gpt-5.4",
-      "gpt-5.4-mini",
-    ]);
+    expect(config.modelProvider.models).toEqual([]);
     expect(config.modelProvider.modelMetadata).toEqual({
       "gpt-5.5": {
         id: "gpt-5.5",
@@ -485,7 +481,7 @@ describe("server default configuration", () => {
 
   it("falls back to comma-separated models when provider model JSON is invalid", async () => {
     setEnv({
-      DEFAULT_PROVIDER_TYPE: "OpenAI",
+      DEFAULT_PROVIDER_TYPE: "Anthropic",
       DEFAULT_PROVIDER_API_KEY: "provider-secret",
       DEFAULT_PROVIDER_MODELS: 'model-a, {"id": "not-json"',
     });
@@ -563,6 +559,46 @@ describe("server default configuration", () => {
     expect(JSON.stringify(await response.json())).not.toContain(
       "provider-secret",
     );
+  });
+
+  it("fetches sorted OpenAI models from /v1/models in the config route", async () => {
+    setEnv({
+      DEFAULT_PROVIDER_TYPE: "OpenAI",
+      DEFAULT_PROVIDER_API_KEY: "provider-secret",
+      DEFAULT_PROVIDER_BASE_URL: "https://llm.internal/custom",
+      DEFAULT_PROVIDER_MODELS: "gpt-4o, gpt-4o-mini",
+    });
+    mocks.safeFetchJson.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      data: {
+        data: [
+          { id: "zzz-model" },
+          { id: "aaa-model" },
+          { id: "mmm-model" },
+        ],
+      },
+    });
+
+    const { GET } = await import("../app/api/config/route");
+    const response = await GET();
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.modelProvider.models).toEqual([
+      "aaa-model",
+      "mmm-model",
+      "zzz-model",
+    ]);
+    expect(mocks.safeFetchJson).toHaveBeenCalledWith(
+      "https://llm.internal/custom/v1/models",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer provider-secret",
+        }),
+      }),
+      expect.any(Object),
+    );
+    expect(JSON.stringify(body)).not.toContain("provider-secret");
   });
 
   it("uses server default search credentials for provider default requests", async () => {
