@@ -1344,7 +1344,10 @@ export const useSettingsStore = create<SettingsState>()(
         if (typeof window === "undefined") return;
         if (error) logDevError("Settings hydration failed:", error);
         void reportAppRestoreHydration("settings", error).then(
-          () => state?.setHasHydrated(true),
+          () => {
+            state?.ensureBuiltInPlugins();
+            state?.setHasHydrated(true);
+          },
           (restoreError) => {
             logDevError(
               "Restored settings failed startup validation:",
