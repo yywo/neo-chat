@@ -14,5 +14,7 @@
   "clearSecret": "Clear saved secret",
   "secretSaved": "Encrypted key saved locally. Original value cannot be viewed.",
   "secretNotSaved": "No local key saved.",
+  "secretSaveRequiresSecureContext": "This connection cannot save keys securely. Open Neo Chat over HTTPS or localhost.",
+  "secretSaveFailed": "Could not save the key in this browser. Check browser storage permissions and try again.",
   "replaceSecretPlaceholder": "Enter a new key to replace saved key…"
 }

@@ -14,5 +14,7 @@
   "clearSecret": "清除已保存密钥",
   "secretSaved": "密钥已加密保存在本地，无法直接查看原文。",
   "secretNotSaved": "尚未保存本地密钥。",
+  "secretSaveRequiresSecureContext": "当前连接无法安全保存密钥。请通过 HTTPS 或 localhost 打开 Neo Chat。",
+  "secretSaveFailed": "无法在此浏览器中保存密钥。请检查浏览器存储权限后重试。",
   "replaceSecretPlaceholder": "输入新密钥以覆盖已保存密钥…"
 }

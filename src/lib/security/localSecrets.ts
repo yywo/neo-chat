@@ -6,6 +6,20 @@ import {
 
 export const LOCAL_SECRET_ALG = "A256GCM" as const;
 
+export const LOCAL_SECRET_ERROR_CODES = {
+  secureContextRequired: "secure_context_required",
+} as const;
+
+export class LocalSecretError extends Error {
+  constructor(
+    public readonly code: (typeof LOCAL_SECRET_ERROR_CODES)[keyof typeof LOCAL_SECRET_ERROR_CODES],
+    message: string,
+  ) {
+    super(message);
+    this.name = "LocalSecretError";
+  }
+}
+
 export interface LocalEncryptedSecretEnvelope {
   v: 1;
   alg: typeof LOCAL_SECRET_ALG;
@@ -52,7 +66,10 @@ let keyMaterialPromise: Promise<LocalKeyMaterial> | null = null;
 
 function getCrypto(): Crypto {
   if (!globalThis.crypto?.subtle) {
-    throw new Error("WebCrypto is required to encrypt local secrets.");
+    throw new LocalSecretError(
+      LOCAL_SECRET_ERROR_CODES.secureContextRequired,
+      "A secure browser context is required to encrypt local secrets.",
+    );
   }
   return globalThis.crypto;
 }

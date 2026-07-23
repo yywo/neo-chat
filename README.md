@@ -112,6 +112,11 @@ pnpm dev
 
 Open `http://localhost:3000`, then configure at least one model provider in Settings.
 
+Saving browser-local API keys requires a secure browser context. Use HTTPS for
+LAN or deployed access; the HTTP exception for `localhost` only applies on the
+same device. Browsers cannot save encrypted keys when Neo Chat is opened from a
+plain HTTP IP address or domain.
+
 For deployment-wide defaults, copy the environment template:
 
 ```bash

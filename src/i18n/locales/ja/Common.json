@@ -14,5 +14,7 @@
   "clearSecret": "保存されたシークレットを消去",
   "secretSaved": "暗号化されたキーがローカルに保存されました。元の値は表示できません。",
   "secretNotSaved": "ローカルキーは保存されていません。",
+  "secretSaveRequiresSecureContext": "この接続ではキーを安全に保存できません。HTTPS または localhost で Neo Chat を開いてください。",
+  "secretSaveFailed": "このブラウザーにキーを保存できませんでした。ストレージ権限を確認して、もう一度お試しください。",
   "replaceSecretPlaceholder": "保存されたキーを置き換えるには、新しいキーを入力してください…"
 }

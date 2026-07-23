@@ -19,7 +19,9 @@ import {
 import { useTranslations } from "next-intl";
 import {
   encryptLocalSecret,
+  LOCAL_SECRET_ERROR_CODES,
   LOCAL_SECRET_CONTEXTS,
+  LocalSecretError,
   type LocalEncryptedSecretEnvelope,
 } from "@/lib/security/localSecrets";
 import AnchoredPortal from "@/components/ui/AnchoredPortal";
@@ -443,15 +445,26 @@ export const SecretInput = ({
   const t = useTranslations("Common");
   const [value, setValue] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [errorKey, setErrorKey] = useState<
+    "secretSaveRequiresSecureContext" | "secretSaveFailed" | null
+  >(null);
   const trimmed = value.trim();
 
   const handleSave = async () => {
     if (!trimmed || isSaving) return;
 
     setIsSaving(true);
+    setErrorKey(null);
     try {
       await onSave(trimmed);
       setValue("");
+    } catch (error) {
+      setErrorKey(
+        error instanceof LocalSecretError &&
+          error.code === LOCAL_SECRET_ERROR_CODES.secureContextRequired
+          ? "secretSaveRequiresSecureContext"
+          : "secretSaveFailed",
+      );
     } finally {
       setIsSaving(false);
     }
@@ -461,9 +474,12 @@ export const SecretInput = ({
     if (!onClear || isSaving) return;
 
     setIsSaving(true);
+    setErrorKey(null);
     try {
       await onClear();
       setValue("");
+    } catch {
+      setErrorKey("secretSaveFailed");
     } finally {
       setIsSaving(false);
     }
@@ -477,7 +493,10 @@ export const SecretInput = ({
           name={name}
           type="password"
           value={value}
-          onChange={(event) => setValue(event.target.value)}
+          onChange={(event) => {
+            setValue(event.target.value);
+            setErrorKey(null);
+          }}
           maxLength={maxLength}
           autoComplete="off"
           spellCheck={false}
@@ -508,8 +527,20 @@ export const SecretInput = ({
           </button>
         ) : null}
       </div>
-      <p className="text-[10px] text-gray-500 dark:text-muted-foreground">
-        {hasSecret ? t("secretSaved") : t("secretNotSaved")}
+      <p
+        role={errorKey ? "alert" : undefined}
+        aria-live="polite"
+        className={`text-[10px] ${
+          errorKey
+            ? "text-red-600 dark:text-red-400"
+            : "text-gray-500 dark:text-muted-foreground"
+        }`}
+      >
+        {errorKey
+          ? t(errorKey)
+          : hasSecret
+            ? t("secretSaved")
+            : t("secretNotSaved")}
       </p>
     </div>
   );

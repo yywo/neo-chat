@@ -4,6 +4,7 @@ import {
   decryptLocalSecret,
   deleteLocalSecretMasterKey,
   encryptLocalSecret,
+  LOCAL_SECRET_ERROR_CODES,
   LOCAL_SECRET_CONTEXTS,
 } from "../lib/security/localSecrets";
 
@@ -143,6 +144,35 @@ describe("local secret envelopes", () => {
         LOCAL_SECRET_CONTEXTS.providerApiKey("ABCDEF"),
       ),
     ).resolves.toBe("local-secret-value");
+  });
+
+  it("identifies secure-context failures for the settings UI", async () => {
+    const cryptoDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "crypto",
+    );
+    Object.defineProperty(globalThis, "crypto", {
+      configurable: true,
+      value: undefined,
+    });
+
+    try {
+      await expect(
+        encryptLocalSecret(
+          "local-secret-value",
+          LOCAL_SECRET_CONTEXTS.providerApiKey("INSECURE"),
+        ),
+      ).rejects.toMatchObject({
+        name: "LocalSecretError",
+        code: LOCAL_SECRET_ERROR_CODES.secureContextRequired,
+      });
+    } finally {
+      if (cryptoDescriptor) {
+        Object.defineProperty(globalThis, "crypto", cryptoDescriptor);
+      } else {
+        delete (globalThis as { crypto?: Crypto }).crypto;
+      }
+    }
   });
 
   it("rejects mismatched contexts", async () => {
