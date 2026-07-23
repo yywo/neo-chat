@@ -113,11 +113,11 @@ function createFallbackFingerprint(value: string): string {
     .join("");
 }
 
-export async function createPluginFunctionFingerprint(
+function createPluginFunctionDefinition(
   plugin: Plugin,
   functionDef: PluginFunction,
-): Promise<string> {
-  const definition = JSON.stringify(
+): string {
+  return JSON.stringify(
     canonicalize({
       version: 1,
       pluginId: plugin.id,
@@ -134,7 +134,15 @@ export async function createPluginFunctionFingerprint(
       parameters: functionDef.parameters,
     }),
   );
-  const subtle = globalThis.crypto?.subtle;
+}
+
+export async function createPluginFunctionFingerprint(
+  plugin: Plugin,
+  functionDef: PluginFunction,
+  forceFallback = false,
+): Promise<string> {
+  const definition = createPluginFunctionDefinition(plugin, functionDef);
+  const subtle = forceFallback ? undefined : globalThis.crypto?.subtle;
   if (!subtle) return `v1:fallback:${createFallbackFingerprint(definition)}`;
 
   const digest = await subtle.digest(

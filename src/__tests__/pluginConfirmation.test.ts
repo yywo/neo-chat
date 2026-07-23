@@ -76,6 +76,15 @@ describe("plugin confirmation policy", () => {
 
     expect(first).toBe(same);
     expect(changed).not.toBe(first);
+    const fallback = await createPluginFunctionFingerprint(
+      plugin,
+      plugin.functions[0],
+      true,
+    );
+    expect(fallback).toBe(
+      await createPluginFunctionFingerprint(plugin, plugin.functions[0], true),
+    );
+    expect(fallback).toMatch(/^v1:fallback:[a-f0-9]{16}$/);
   });
 
   it("redacts sensitive fields without changing ordinary arguments", () => {

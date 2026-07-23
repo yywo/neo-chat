@@ -1,8 +1,13 @@
 import type { Plugin, PluginConfig, PluginFunction } from "@/types";
+import { getPluginById } from "@/config/plugins";
 
 export interface ResolvedPluginFunction {
   plugin: Plugin;
   functionDef: PluginFunction;
+}
+
+function getCurrentPluginDefinition(plugin: Plugin): Plugin {
+  return getPluginById(plugin.id) || plugin;
 }
 
 export function resolvePluginFunction(
@@ -12,13 +17,14 @@ export function resolvePluginFunction(
 ): ResolvedPluginFunction | null {
   const allowed = allowedPluginIds?.length ? new Set(allowedPluginIds) : null;
   for (const plugin of installedPlugins) {
-    if (allowed && !allowed.has(plugin.id)) continue;
+    const currentPlugin = getCurrentPluginDefinition(plugin);
+    if (allowed && !allowed.has(currentPlugin.id)) continue;
 
-    const functionDef = plugin.functions?.find(
+    const functionDef = currentPlugin.functions?.find(
       (fn) => fn.name === functionName,
     );
     if (functionDef) {
-      return { plugin, functionDef };
+      return { plugin: currentPlugin, functionDef };
     }
   }
 
@@ -32,7 +38,8 @@ export function getEnabledPluginFunctions(
     disabledFunctions?: string[];
   },
 ): PluginFunction[] {
-  let functionsToAdd = plugin.functions || [];
+  const currentPlugin = getCurrentPluginDefinition(plugin);
+  let functionsToAdd = currentPlugin.functions || [];
 
   if (pluginConfig?.enabledFunctions) {
     functionsToAdd = functionsToAdd.filter((fn) =>
@@ -57,14 +64,15 @@ export function resolveEnabledPluginFunction(
   let resolved: ResolvedPluginFunction | null = null;
 
   for (const plugin of installedPlugins) {
-    if (allowed && !allowed.has(plugin.id)) continue;
+    const currentPlugin = getCurrentPluginDefinition(plugin);
+    if (allowed && !allowed.has(currentPlugin.id)) continue;
     const functionDef = getEnabledPluginFunctions(
-      plugin,
-      pluginConfigs[plugin.id],
+      currentPlugin,
+      pluginConfigs[currentPlugin.id],
     ).find((fn) => fn.name === functionName);
     if (!functionDef) continue;
     if (resolved) return null;
-    resolved = { plugin, functionDef };
+    resolved = { plugin: currentPlugin, functionDef };
   }
 
   return resolved;
@@ -82,14 +90,15 @@ export function getPluginFunctionNameCollisions(
   const names = new Map<string, string[]>();
 
   for (const plugin of installedPlugins) {
-    if (active && !active.has(plugin.id)) continue;
+    const currentPlugin = getCurrentPluginDefinition(plugin);
+    if (active && !active.has(currentPlugin.id)) continue;
     for (const fn of getEnabledPluginFunctions(
-      plugin,
-      pluginConfigs[plugin.id],
+      currentPlugin,
+      pluginConfigs[currentPlugin.id],
     )) {
       const pluginIds = names.get(fn.name) || [];
-      if (!pluginIds.includes(plugin.id)) {
-        pluginIds.push(plugin.id);
+      if (!pluginIds.includes(currentPlugin.id)) {
+        pluginIds.push(currentPlugin.id);
       }
       names.set(fn.name, pluginIds);
     }

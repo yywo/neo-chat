@@ -189,9 +189,11 @@ export const executePluginFunction = async (
 
   const { plugin: foundPlugin, functionDef: foundFn } = resolved;
   if (expectedContract) {
+    // Match the algorithm used when the confirmation fingerprint was created.
     const currentFingerprint = await createPluginFunctionFingerprint(
       foundPlugin,
       foundFn,
+      expectedContract.functionFingerprint.startsWith("v1:fallback:"),
     );
     if (
       foundPlugin.id !== expectedContract.pluginId ||

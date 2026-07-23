@@ -4,6 +4,7 @@ import {
   AGNES_VIDEO_PLUGIN,
   BUILT_IN_PLUGINS,
   GEMINI_IMAGE_PLUGIN,
+  JINA_READER_PLUGIN,
   OPENAI_IMAGE_PLUGIN,
   OPENAI_RESPONSES_IMAGE_PLUGIN,
 } from "../config/plugins";
@@ -49,6 +50,29 @@ describe("plugin function resolution", () => {
     expect(
       resolvePluginFunction([inactive], "search", ["another-plugin"]),
     ).toBeNull();
+  });
+
+  it("uses the current definition for persisted built-in plugins", () => {
+    const staleJina: Plugin = {
+      ...JINA_READER_PLUGIN,
+      builtIn: false,
+      functions: [
+        {
+          ...JINA_READER_PLUGIN.functions[0],
+          path: "/stale-reader",
+        },
+      ],
+    };
+
+    const resolved = resolvePluginFunction([staleJina], "read_webpage", [
+      JINA_READER_PLUGIN.id,
+    ]);
+
+    expect(resolved?.plugin).toBe(JINA_READER_PLUGIN);
+    expect(resolved?.functionDef.path).toBe("/{url}");
+    expect(getEnabledPluginFunctions(staleJina)[0]).toBe(
+      JINA_READER_PLUGIN.functions[0],
+    );
   });
 
   it("fails closed when multiple enabled plugins expose the same function", () => {

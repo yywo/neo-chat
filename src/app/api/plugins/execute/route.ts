@@ -78,9 +78,11 @@ export async function POST(request: NextRequest) {
       }
 
       if (expectedFingerprint) {
+        // Clients without Web Crypto use the legacy fallback fingerprint.
         const currentFingerprint = await createPluginFunctionFingerprint(
           registeredPlugin,
           functionDef,
+          expectedFingerprint.startsWith("v1:fallback:"),
         );
         if (currentFingerprint !== expectedFingerprint) {
           return NextResponse.json(
