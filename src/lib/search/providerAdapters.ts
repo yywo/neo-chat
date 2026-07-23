@@ -81,6 +81,36 @@ function assertSearchResponseOk(response: Response, message: string): void {
   }
 }
 
+function appendEndpointPath(
+  baseUrl: string | undefined,
+  fallback: string,
+  path: string,
+): string {
+  const url = new URL(baseUrl?.trim() || fallback);
+  const baseSegments = url.pathname.split("/").filter(Boolean);
+  const endpointSegments = path.split("/").filter(Boolean);
+  const maxOverlap = Math.min(baseSegments.length, endpointSegments.length);
+  let overlap = 0;
+
+  for (let size = maxOverlap; size > 0; size -= 1) {
+    if (
+      baseSegments
+        .slice(-size)
+        .every((segment, index) => segment === endpointSegments[index])
+    ) {
+      overlap = size;
+      break;
+    }
+  }
+
+  url.pathname = `/${baseSegments
+    .concat(endpointSegments.slice(overlap))
+    .join("/")}`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
 const rewritingPrompt = `You are tasked with re-writing the following text to markdown. Ensure you do not change the meaning or story behind the text. 
 
 **Respond only the updated markdown text, and no additional text before or after.**`;
@@ -99,10 +129,11 @@ export async function runSearchProvider({
   const fetchOptions = getFetchOptions(provider);
 
   if (provider === "tavily") {
-    const endpoint = new URL(
-      "/search",
-      baseUrl || "https://api.tavily.com",
-    ).toString();
+    const endpoint = appendEndpointPath(
+      baseUrl,
+      "https://api.tavily.com",
+      "search",
+    );
     const { response, data } = await fetchJson<any>(
       endpoint,
       {
@@ -138,10 +169,11 @@ export async function runSearchProvider({
   }
 
   if (provider === "firecrawl") {
-    const endpoint = new URL(
-      "/v2/search",
-      baseUrl || "https://api.firecrawl.dev",
-    ).toString();
+    const endpoint = appendEndpointPath(
+      baseUrl,
+      "https://api.firecrawl.dev",
+      "v2/search",
+    );
     const { response, data } = await fetchJson<any>(
       endpoint,
       {
@@ -204,10 +236,11 @@ export async function runSearchProvider({
       delete exaHeaders.Authorization;
     }
 
-    const endpoint = new URL(
-      "/search",
-      baseUrl || "https://api.exa.ai",
-    ).toString();
+    const endpoint = appendEndpointPath(
+      baseUrl,
+      "https://api.exa.ai",
+      "search",
+    );
     const { response, data } = await fetchJson<any>(
       endpoint,
       {
@@ -257,10 +290,11 @@ export async function runSearchProvider({
   }
 
   if (provider === "bocha") {
-    const endpoint = new URL(
-      "/v1/web-search",
-      baseUrl || "https://api.bochaai.com",
-    ).toString();
+    const endpoint = appendEndpointPath(
+      baseUrl,
+      "https://api.bochaai.com",
+      "v1/web-search",
+    );
     const { response, data } = await fetchJson<any>(
       endpoint,
       {
@@ -315,10 +349,11 @@ export async function runSearchProvider({
     };
 
     const searchQuery = new URLSearchParams(params);
-    const endpoint = new URL(
-      `/search?${searchQuery.toString()}`,
-      baseUrl || "http://localhost:8080",
-    ).toString();
+    const endpointUrl = new URL(
+      appendEndpointPath(baseUrl, "http://localhost:8080", "search"),
+    );
+    endpointUrl.search = searchQuery.toString();
+    const endpoint = endpointUrl.toString();
     const { response, data } = await fetchJson<any>(
       endpoint,
       { method: "GET", signal },

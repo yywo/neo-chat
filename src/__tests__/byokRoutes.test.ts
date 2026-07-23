@@ -134,6 +134,7 @@ describe("BYOK route integration", () => {
           query: "neo",
           config: {
             apiKeySecret,
+            baseUrl: "https://search.example/proxy/tavily",
           },
         }),
       }) as any,
@@ -145,7 +146,7 @@ describe("BYOK route integration", () => {
       "search:tavily",
     );
     expect(mocks.safeFetchJson).toHaveBeenCalledWith(
-      "https://api.tavily.com/search",
+      "https://search.example/proxy/tavily/search",
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: "Bearer tvly-secret",

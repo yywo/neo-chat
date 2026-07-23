@@ -66,6 +66,42 @@ describe("search provider adapters", () => {
     });
   });
 
+  it.each([
+    [
+      "a proxy path prefix",
+      "https://search.example/proxy/tavily",
+      "https://search.example/proxy/tavily/search",
+    ],
+    [
+      "the complete search endpoint",
+      "https://search.example/proxy/tavily/search/",
+      "https://search.example/proxy/tavily/search",
+    ],
+  ])(
+    "preserves %s in a custom Tavily Base URL",
+    async (_, baseUrl, expected) => {
+      const fetchJson = vi.fn().mockResolvedValue({
+        response: new Response(null, { status: 200 }),
+        data: { results: [], images: [] },
+      });
+
+      await runSearchProvider({
+        provider: "tavily",
+        query: "neo chat",
+        apiKey: "tvly-key",
+        baseUrl,
+        maxResultNumber: 2,
+        fetchJson,
+      });
+
+      expect(fetchJson).toHaveBeenCalledWith(
+        expected,
+        expect.any(Object),
+        expect.any(Object),
+      );
+    },
+  );
+
   it("maps Bocha image descriptions from matching web results", async () => {
     const fetchJson = vi.fn().mockResolvedValue({
       response: new Response(null, { status: 200 }),
