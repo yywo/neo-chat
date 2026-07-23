@@ -9,10 +9,6 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SecretInput } from "../components/settings/SettingsUI";
-import {
-  LOCAL_SECRET_ERROR_CODES,
-  LocalSecretError,
-} from "../lib/security/localSecrets";
 
 vi.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
@@ -21,15 +17,8 @@ vi.mock("next-intl", () => ({
 describe("SecretInput", () => {
   afterEach(() => cleanup());
 
-  it("shows the secure-context error and retains the key after a failed save", async () => {
-    const onSave = vi
-      .fn()
-      .mockRejectedValue(
-        new LocalSecretError(
-          LOCAL_SECRET_ERROR_CODES.secureContextRequired,
-          "secure context required",
-        ),
-      );
+  it("shows an error and retains the key after a failed save", async () => {
+    const onSave = vi.fn().mockRejectedValue(new Error("IndexedDB denied"));
 
     render(
       <SecretInput
@@ -47,21 +36,22 @@ describe("SecretInput", () => {
 
     await waitFor(() =>
       expect(screen.getByRole("alert").textContent).toContain(
-        "secretSaveRequiresSecureContext",
+        "secretSaveFailed",
       ),
     );
     expect((input as HTMLInputElement).value).toBe("test-secret");
     expect(onSave).toHaveBeenCalledWith("test-secret");
   });
 
-  it("shows a generic storage error for other save failures", async () => {
+  it("clears the input after a successful save", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
     render(
       <SecretInput
         id="api-key"
         name="apiKey"
         placeholder="enter key"
         hasSecret={false}
-        onSave={() => Promise.reject(new Error("IndexedDB denied"))}
+        onSave={onSave}
       />,
     );
 
@@ -69,10 +59,8 @@ describe("SecretInput", () => {
     fireEvent.change(input, { target: { value: "test-secret" } });
     fireEvent.click(screen.getByRole("button", { name: "saveSecret" }));
 
-    await waitFor(() =>
-      expect(screen.getByRole("alert").textContent).toContain(
-        "secretSaveFailed",
-      ),
-    );
+    await waitFor(() => expect((input as HTMLInputElement).value).toBe(""));
+    expect(onSave).toHaveBeenCalledWith("test-secret");
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

@@ -4,7 +4,6 @@ import {
   decryptLocalSecret,
   deleteLocalSecretMasterKey,
   encryptLocalSecret,
-  LOCAL_SECRET_ERROR_CODES,
   LOCAL_SECRET_CONTEXTS,
 } from "../lib/security/localSecrets";
 
@@ -119,6 +118,31 @@ function createFailingWriteIndexedDb(error: Error): IDBFactory {
   } as unknown as IDBFactory;
 }
 
+function createMemoryIndexedDb(): IDBFactory {
+  const records = new Map<IDBValidKey, unknown>();
+  const store = {
+    get: (key: IDBValidKey) => successfulRequest(records.get(key)),
+    put: (record: { id: IDBValidKey }) => {
+      records.set(record.id, record);
+      return successfulRequest(record.id);
+    },
+    delete: (key: IDBValidKey) => {
+      records.delete(key);
+      return successfulRequest(undefined);
+    },
+  };
+  const db = {
+    close: () => {},
+    transaction: () => ({
+      objectStore: () => store,
+    }),
+  } as unknown as IDBDatabase;
+
+  return {
+    open: () => successfulOpenRequest(db),
+  } as unknown as IDBFactory;
+}
+
 describe("local secret envelopes", () => {
   afterEach(async () => {
     restoreIndexedDb();
@@ -146,26 +170,29 @@ describe("local secret envelopes", () => {
     ).resolves.toBe("local-secret-value");
   });
 
-  it("identifies secure-context failures for the settings UI", async () => {
+  it("roundtrips secrets with the HTTP-compatible AES-GCM fallback", async () => {
     const cryptoDescriptor = Object.getOwnPropertyDescriptor(
       globalThis,
       "crypto",
     );
+    const secureCrypto = globalThis.crypto;
+    setIndexedDb(createMemoryIndexedDb());
     Object.defineProperty(globalThis, "crypto", {
       configurable: true,
-      value: undefined,
+      value: {
+        getRandomValues: secureCrypto.getRandomValues.bind(secureCrypto),
+      },
     });
 
+    const context = LOCAL_SECRET_CONTEXTS.providerApiKey("INSECURE");
+    let envelope;
     try {
-      await expect(
-        encryptLocalSecret(
-          "local-secret-value",
-          LOCAL_SECRET_CONTEXTS.providerApiKey("INSECURE"),
-        ),
-      ).rejects.toMatchObject({
-        name: "LocalSecretError",
-        code: LOCAL_SECRET_ERROR_CODES.secureContextRequired,
+      envelope = await encryptLocalSecret("local-secret-value", context);
+
+      expect(globalThis.__neoChatLocalSecretFallbackKeyMaterial).toMatchObject({
+        kind: "raw",
       });
+      expect(JSON.stringify(envelope)).not.toContain("local-secret-value");
     } finally {
       if (cryptoDescriptor) {
         Object.defineProperty(globalThis, "crypto", cryptoDescriptor);
@@ -173,6 +200,12 @@ describe("local secret envelopes", () => {
         delete (globalThis as { crypto?: Crypto }).crypto;
       }
     }
+
+    clearLocalSecretKeyCache();
+    globalThis.__neoChatLocalSecretFallbackKeyMaterial = undefined;
+    await expect(decryptLocalSecret(envelope, context)).resolves.toBe(
+      "local-secret-value",
+    );
   });
 
   it("rejects mismatched contexts", async () => {

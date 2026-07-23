@@ -19,9 +19,7 @@ import {
 import { useTranslations } from "next-intl";
 import {
   encryptLocalSecret,
-  LOCAL_SECRET_ERROR_CODES,
   LOCAL_SECRET_CONTEXTS,
-  LocalSecretError,
   type LocalEncryptedSecretEnvelope,
 } from "@/lib/security/localSecrets";
 import AnchoredPortal from "@/components/ui/AnchoredPortal";
@@ -445,9 +443,7 @@ export const SecretInput = ({
   const t = useTranslations("Common");
   const [value, setValue] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-  const [errorKey, setErrorKey] = useState<
-    "secretSaveRequiresSecureContext" | "secretSaveFailed" | null
-  >(null);
+  const [errorKey, setErrorKey] = useState<"secretSaveFailed" | null>(null);
   const trimmed = value.trim();
 
   const handleSave = async () => {
@@ -458,13 +454,8 @@ export const SecretInput = ({
     try {
       await onSave(trimmed);
       setValue("");
-    } catch (error) {
-      setErrorKey(
-        error instanceof LocalSecretError &&
-          error.code === LOCAL_SECRET_ERROR_CODES.secureContextRequired
-          ? "secretSaveRequiresSecureContext"
-          : "secretSaveFailed",
-      );
+    } catch {
+      setErrorKey("secretSaveFailed");
     } finally {
       setIsSaving(false);
     }

@@ -1,24 +1,7 @@
-import {
-  arrayBufferToBytes,
-  base64UrlToBytes,
-  bytesToBase64Url,
-} from "../byok/encoding";
+import { gcm } from "@noble/ciphers/aes";
+import { base64UrlToBytes, bytesToBase64Url } from "../byok/encoding";
 
 export const LOCAL_SECRET_ALG = "A256GCM" as const;
-
-export const LOCAL_SECRET_ERROR_CODES = {
-  secureContextRequired: "secure_context_required",
-} as const;
-
-export class LocalSecretError extends Error {
-  constructor(
-    public readonly code: (typeof LOCAL_SECRET_ERROR_CODES)[keyof typeof LOCAL_SECRET_ERROR_CODES],
-    message: string,
-  ) {
-    super(message);
-    this.name = "LocalSecretError";
-  }
-}
 
 export interface LocalEncryptedSecretEnvelope {
   v: 1;
@@ -45,33 +28,70 @@ const DB_NAME = "neo-chat-local-secrets";
 const DB_VERSION = 1;
 const STORE_NAME = "crypto_keys";
 const MASTER_KEY_RECORD_ID = "default";
+const FALLBACK_KEY_RECORD_ID = "http_fallback";
+const RAW_KEY_LENGTH = 32;
 
-type LocalKeyMaterial = {
+type KeySlot = typeof MASTER_KEY_RECORD_ID | typeof FALLBACK_KEY_RECORD_ID;
+
+type WebCryptoKeyMaterial = {
   id: string;
+  kind: "webcrypto";
   key: CryptoKey;
 };
+
+type RawKeyMaterial = {
+  id: string;
+  kind: "raw";
+  key: Uint8Array;
+};
+
+type LocalKeyMaterial = WebCryptoKeyMaterial | RawKeyMaterial;
 
 type StoredKeyRecord = {
   id: string;
   keyId: string;
-  key: CryptoKey;
+  key?: CryptoKey;
+  rawKey?: Uint8Array;
 };
 
 declare global {
   // Used only when IndexedDB is unavailable, such as SSR or unit tests.
   var __neoChatLocalSecretKeyMaterial: LocalKeyMaterial | undefined;
+  var __neoChatLocalSecretFallbackKeyMaterial: LocalKeyMaterial | undefined;
 }
 
-let keyMaterialPromise: Promise<LocalKeyMaterial> | null = null;
+const keyMaterialPromises = new Map<KeySlot, Promise<LocalKeyMaterial>>();
 
 function getCrypto(): Crypto {
-  if (!globalThis.crypto?.subtle) {
-    throw new LocalSecretError(
-      LOCAL_SECRET_ERROR_CODES.secureContextRequired,
-      "A secure browser context is required to encrypt local secrets.",
+  if (!globalThis.crypto?.getRandomValues) {
+    throw new Error(
+      "Cryptographically secure randomness is required for local secrets.",
     );
   }
   return globalThis.crypto;
+}
+
+function getPreferredKeySlot(): KeySlot {
+  return globalThis.crypto?.subtle
+    ? MASTER_KEY_RECORD_ID
+    : FALLBACK_KEY_RECORD_ID;
+}
+
+function getMemoryKey(slot: KeySlot): LocalKeyMaterial | undefined {
+  return slot === MASTER_KEY_RECORD_ID
+    ? globalThis.__neoChatLocalSecretKeyMaterial
+    : globalThis.__neoChatLocalSecretFallbackKeyMaterial;
+}
+
+function setMemoryKey(
+  slot: KeySlot,
+  material: LocalKeyMaterial | undefined,
+): void {
+  if (slot === MASTER_KEY_RECORD_ID) {
+    globalThis.__neoChatLocalSecretKeyMaterial = material;
+  } else {
+    globalThis.__neoChatLocalSecretFallbackKeyMaterial = material;
+  }
 }
 
 function getIndexedDb(): IDBFactory | undefined {
@@ -106,7 +126,7 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
-async function readStoredKey(): Promise<LocalKeyMaterial | null> {
+async function readStoredKey(slot: KeySlot): Promise<LocalKeyMaterial | null> {
   if (!getIndexedDb()) return null;
 
   const db = await openDb();
@@ -114,17 +134,30 @@ async function readStoredKey(): Promise<LocalKeyMaterial | null> {
     const transaction = db.transaction(STORE_NAME, "readonly");
     const store = transaction.objectStore(STORE_NAME);
     const record = await requestToPromise<StoredKeyRecord | undefined>(
-      store.get(MASTER_KEY_RECORD_ID),
+      store.get(slot),
     );
-    return record?.key ? { id: record.keyId, key: record.key } : null;
+    if (!record) return null;
+    if (record.rawKey?.byteLength === RAW_KEY_LENGTH) {
+      return {
+        id: record.keyId,
+        kind: "raw",
+        key: new Uint8Array(record.rawKey),
+      };
+    }
+    return record.key
+      ? { id: record.keyId, kind: "webcrypto", key: record.key }
+      : null;
   } finally {
     db.close();
   }
 }
 
-async function writeStoredKey(material: LocalKeyMaterial): Promise<void> {
+async function writeStoredKey(
+  slot: KeySlot,
+  material: LocalKeyMaterial,
+): Promise<void> {
   if (!getIndexedDb()) {
-    globalThis.__neoChatLocalSecretKeyMaterial = material;
+    setMemoryKey(slot, material);
     return;
   }
 
@@ -132,13 +165,14 @@ async function writeStoredKey(material: LocalKeyMaterial): Promise<void> {
   try {
     const transaction = db.transaction(STORE_NAME, "readwrite");
     const store = transaction.objectStore(STORE_NAME);
-    await requestToPromise(
-      store.put({
-        id: MASTER_KEY_RECORD_ID,
-        keyId: material.id,
-        key: material.key,
-      } satisfies StoredKeyRecord),
-    );
+    const record: StoredKeyRecord = {
+      id: slot,
+      keyId: material.id,
+      ...(material.kind === "raw"
+        ? { rawKey: material.key }
+        : { key: material.key }),
+    };
+    await requestToPromise(store.put(record));
   } finally {
     db.close();
   }
@@ -159,57 +193,93 @@ function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   ) as ArrayBuffer;
 }
 
-async function createMasterKey(): Promise<LocalKeyMaterial> {
+async function createMasterKey(slot: KeySlot): Promise<LocalKeyMaterial> {
   const crypto = getCrypto();
+  if (slot === FALLBACK_KEY_RECORD_ID) {
+    return {
+      id: createKeyId(),
+      kind: "raw",
+      key: crypto.getRandomValues(new Uint8Array(RAW_KEY_LENGTH)),
+    };
+  }
+
+  if (!crypto.subtle) {
+    throw new Error("WebCrypto is unavailable for the secure local key slot.");
+  }
   const key = await crypto.subtle.generateKey(
     { name: "AES-GCM", length: 256 },
     false,
     ["encrypt", "decrypt"],
   );
-  return { id: createKeyId(), key };
+  return { id: createKeyId(), kind: "webcrypto", key };
 }
 
-async function loadKeyMaterial(): Promise<LocalKeyMaterial> {
-  if (globalThis.__neoChatLocalSecretKeyMaterial) {
-    return globalThis.__neoChatLocalSecretKeyMaterial;
+async function loadKeyMaterial(slot: KeySlot): Promise<LocalKeyMaterial> {
+  const memoryKey = getMemoryKey(slot);
+  if (memoryKey) {
+    return memoryKey;
   }
 
   if (!getIndexedDb()) {
-    const material = await createMasterKey();
-    globalThis.__neoChatLocalSecretKeyMaterial = material;
+    const material = await createMasterKey(slot);
+    setMemoryKey(slot, material);
     return material;
   }
 
-  const stored = await readStoredKey();
+  const stored = await readStoredKey(slot);
   if (stored) {
-    globalThis.__neoChatLocalSecretKeyMaterial = stored;
+    setMemoryKey(slot, stored);
     return stored;
   }
 
-  const material = await createMasterKey();
-  await writeStoredKey(material);
-  globalThis.__neoChatLocalSecretKeyMaterial = material;
+  const material = await createMasterKey(slot);
+  await writeStoredKey(slot, material);
+  setMemoryKey(slot, material);
   return material;
 }
 
-async function getKeyMaterial(): Promise<LocalKeyMaterial> {
-  if (!keyMaterialPromise) {
-    keyMaterialPromise = loadKeyMaterial().catch((error) => {
-      keyMaterialPromise = null;
+async function getKeyMaterial(slot: KeySlot): Promise<LocalKeyMaterial> {
+  let promise = keyMaterialPromises.get(slot);
+  if (!promise) {
+    promise = loadKeyMaterial(slot).catch((error) => {
+      keyMaterialPromises.delete(slot);
       throw error;
     });
+    keyMaterialPromises.set(slot, promise);
   }
 
-  return keyMaterialPromise;
+  return promise;
+}
+
+async function getKeyMaterialById(keyId: string): Promise<LocalKeyMaterial> {
+  for (const slot of [MASTER_KEY_RECORD_ID, FALLBACK_KEY_RECORD_ID] as const) {
+    const memoryKey = getMemoryKey(slot);
+    if (memoryKey?.id === keyId) return memoryKey;
+  }
+
+  if (getIndexedDb()) {
+    for (const slot of [
+      MASTER_KEY_RECORD_ID,
+      FALLBACK_KEY_RECORD_ID,
+    ] as const) {
+      const stored = await readStoredKey(slot);
+      if (!stored) continue;
+      setMemoryKey(slot, stored);
+      if (stored.id === keyId) return stored;
+    }
+  }
+
+  throw new Error("Local secret key id mismatch");
 }
 
 export function clearLocalSecretKeyCache(): void {
-  keyMaterialPromise = null;
+  keyMaterialPromises.clear();
 }
 
 export async function deleteLocalSecretMasterKey(): Promise<void> {
-  keyMaterialPromise = null;
-  globalThis.__neoChatLocalSecretKeyMaterial = undefined;
+  keyMaterialPromises.clear();
+  setMemoryKey(MASTER_KEY_RECORD_ID, undefined);
+  setMemoryKey(FALLBACK_KEY_RECORD_ID, undefined);
 
   if (!getIndexedDb()) return;
 
@@ -217,7 +287,10 @@ export async function deleteLocalSecretMasterKey(): Promise<void> {
   try {
     const transaction = db.transaction(STORE_NAME, "readwrite");
     const store = transaction.objectStore(STORE_NAME);
-    await requestToPromise(store.delete(MASTER_KEY_RECORD_ID));
+    await Promise.all([
+      requestToPromise(store.delete(MASTER_KEY_RECORD_ID)),
+      requestToPromise(store.delete(FALLBACK_KEY_RECORD_ID)),
+    ]);
   } finally {
     db.close();
   }
@@ -256,25 +329,32 @@ export async function encryptLocalSecret(
   if (!trimmed) return undefined;
 
   const crypto = getCrypto();
-  const { id, key } = await getKeyMaterial();
+  const { id, kind, key } = await getKeyMaterial(getPreferredKeySlot());
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encoder = new TextEncoder();
-  const ciphertext = await crypto.subtle.encrypt(
-    {
-      name: "AES-GCM",
-      iv,
-      additionalData: encoder.encode(context),
-    },
-    key,
-    encoder.encode(trimmed),
-  );
+  const additionalData = encoder.encode(context);
+  const plaintext = encoder.encode(trimmed);
+  const ciphertext =
+    kind === "raw"
+      ? gcm(key, iv, additionalData).encrypt(plaintext)
+      : new Uint8Array(
+          await crypto.subtle.encrypt(
+            {
+              name: "AES-GCM",
+              iv,
+              additionalData,
+            },
+            key,
+            plaintext,
+          ),
+        );
 
   return {
     v: 1,
     alg: LOCAL_SECRET_ALG,
     keyId: id,
     iv: bytesToBase64Url(iv),
-    ciphertext: bytesToBase64Url(arrayBufferToBytes(ciphertext)),
+    ciphertext: bytesToBase64Url(ciphertext),
     context,
   };
 }
@@ -292,20 +372,24 @@ export async function decryptLocalSecret(
   }
 
   const crypto = getCrypto();
-  const { id, key } = await getKeyMaterial();
-  if (envelope.keyId !== id) {
-    throw new Error("Local secret key id mismatch");
-  }
-
-  const plaintext = await crypto.subtle.decrypt(
-    {
-      name: "AES-GCM",
-      iv: bytesToArrayBuffer(base64UrlToBytes(envelope.iv)),
-      additionalData: new TextEncoder().encode(expectedContext),
-    },
-    key,
-    bytesToArrayBuffer(base64UrlToBytes(envelope.ciphertext)),
-  );
+  const { kind, key } = await getKeyMaterialById(envelope.keyId);
+  const iv = base64UrlToBytes(envelope.iv);
+  const ciphertext = base64UrlToBytes(envelope.ciphertext);
+  const additionalData = new TextEncoder().encode(expectedContext);
+  const plaintext =
+    kind === "raw"
+      ? gcm(key, iv, additionalData).decrypt(ciphertext)
+      : new Uint8Array(
+          await crypto.subtle.decrypt(
+            {
+              name: "AES-GCM",
+              iv: bytesToArrayBuffer(iv),
+              additionalData,
+            },
+            key,
+            bytesToArrayBuffer(ciphertext),
+          ),
+        );
 
   return new TextDecoder().decode(plaintext);
 }

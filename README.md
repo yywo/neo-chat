@@ -112,10 +112,10 @@ pnpm dev
 
 Open `http://localhost:3000`, then configure at least one model provider in Settings.
 
-Saving browser-local API keys requires a secure browser context. Use HTTPS for
-LAN or deployed access; the HTTP exception for `localhost` only applies on the
-same device. Browsers cannot save encrypted keys when Neo Chat is opened from a
-plain HTTP IP address or domain.
+When WebCrypto is unavailable on a plain HTTP IP address, Neo Chat uses an
+audited JavaScript AES-GCM implementation for browser-local API key encryption.
+This preserves encrypted local storage compatibility, but HTTP traffic can
+still be intercepted or modified. Use HTTPS for production and untrusted LANs.
 
 For deployment-wide defaults, copy the environment template:
 

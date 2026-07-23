@@ -104,9 +104,9 @@ pnpm dev
 
 打开 `http://localhost:3000`，然后在设置里配置至少一个模型供应商。
 
-在浏览器本地保存 API 密钥需要安全上下文。通过局域网或部署地址访问时请使用
-HTTPS；`localhost` 的 HTTP 例外仅适用于本机。通过普通 HTTP IP 地址或域名打开
-Neo Chat 时，浏览器无法保存加密密钥。
+通过普通 HTTP IP 地址访问且 WebCrypto 不可用时，Neo Chat 会使用经过审计的
+JavaScript AES-GCM 实现加密浏览器本地 API 密钥，以保持本地加密存储可用。
+但 HTTP 流量仍可能被截获或篡改，生产环境及不可信局域网应使用 HTTPS。
 
 如需部署级默认配置，可以复制环境变量模板：
 
