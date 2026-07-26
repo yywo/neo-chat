@@ -482,7 +482,7 @@ const ChatAppShell = ({
             <div
               ref={messagesScrollRef}
               onScroll={updateIsNearMessageBottom}
-              className="relative flex-1 overflow-y-auto px-3 pb-[calc(8rem+env(safe-area-inset-bottom))] pt-4 motion-safe:scroll-smooth md:px-6 md:pt-6"
+              className="relative flex-1 overflow-y-auto px-3 pb-[calc(8rem+env(safe-area-inset-bottom))] pt-4 [overflow-anchor:none] md:px-6 md:pt-6"
             >
               <div className="w-full max-w-3xl mx-auto min-h-full flex flex-col">
                 {currentSession &&
@@ -525,7 +525,7 @@ const ChatAppShell = ({
                             id={`message-${msg.id}`}
                             data-message-id={msg.id}
                             tabIndex={-1}
-                            className={`[content-visibility:auto] [contain-intrinsic-size:0_240px] rounded-xl outline-none transition-shadow ${
+                            className={`[content-visibility:auto] [contain-intrinsic-size:auto_0px_auto_240px] rounded-xl outline-none transition-shadow ${
                               focusedMessageId === msg.id
                                 ? "ring-2 ring-blue-500/60 ring-offset-2 ring-offset-background"
                                 : ""

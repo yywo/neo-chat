@@ -244,6 +244,8 @@ const ChatApp = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const isNearMessageBottomRef = useRef(true);
+  const followScrollFrameRef = useRef<number | null>(null);
+  const followedMessageCountRef = useRef(0);
   const messageInputRef = useRef<MessageInputRef>(null);
   const actionErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -625,13 +627,30 @@ const ChatApp = () => {
     isNearMessageBottomRef.current = distanceFromBottom < 160;
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (followScrollFrameRef.current !== null) {
+        cancelAnimationFrame(followScrollFrameRef.current);
+        followScrollFrameRef.current = null;
+      }
+    };
+  }, []);
+
   // Scroll to bottom when the user is already following the live stream.
   useEffect(() => {
+    const isMessageCountChange =
+      messages.length !== followedMessageCountRef.current;
+    followedMessageCountRef.current = messages.length;
+
     if (
-      welcomeState === "hidden" &&
-      (isGenerating || messages.length > 0) &&
-      isNearMessageBottomRef.current
+      welcomeState !== "hidden" ||
+      (!isGenerating && messages.length === 0) ||
+      !isNearMessageBottomRef.current
     ) {
+      return;
+    }
+
+    if (isMessageCountChange) {
       const reduceMotion =
         typeof window !== "undefined" &&
         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -639,7 +658,19 @@ const ChatApp = () => {
         behavior: reduceMotion ? "auto" : "smooth",
         block: "end",
       });
+      return;
     }
+
+    // Streaming growth of an existing message: pin to the bottom instantly and
+    // at most once per frame. Restarting a smooth-scroll animation on every
+    // chunk makes the viewport stutter and fight the user's own scrolling.
+    if (followScrollFrameRef.current !== null) return;
+    followScrollFrameRef.current = requestAnimationFrame(() => {
+      followScrollFrameRef.current = null;
+      const container = messagesScrollRef.current;
+      if (!container || !isNearMessageBottomRef.current) return;
+      container.scrollTop = container.scrollHeight - container.clientHeight;
+    });
   }, [messages, isGenerating, welcomeState]);
 
   // --- Handlers ---

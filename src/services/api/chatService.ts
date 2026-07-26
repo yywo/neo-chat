@@ -537,6 +537,50 @@ export interface ModelInfo {
   providerName?: string;
 }
 
+// Coalesce streaming UI notifications so each incoming token does not force a
+// full re-render of the growing message. Later chunks within the interval are
+// merged into a trailing emit, and flush() guarantees the final state is
+// delivered synchronously before the stream promise settles.
+const STREAM_UI_UPDATE_INTERVAL_MS = 50;
+
+type StreamChunkListener = (
+  text: string,
+  reasoning?: string,
+  outputBlocks?: MessageOutputBlock[],
+) => void;
+
+const createThrottledChunkEmitter = (onChunk: StreamChunkListener) => {
+  let pendingArgs: Parameters<StreamChunkListener> | null = null;
+  let trailingTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastEmitTime = 0;
+
+  const flush = () => {
+    if (trailingTimer !== null) {
+      clearTimeout(trailingTimer);
+      trailingTimer = null;
+    }
+    if (!pendingArgs) return;
+    const args = pendingArgs;
+    pendingArgs = null;
+    lastEmitTime = Date.now();
+    onChunk(...args);
+  };
+
+  const emit: StreamChunkListener = (...args) => {
+    pendingArgs = args;
+    const elapsed = Date.now() - lastEmitTime;
+    if (elapsed >= STREAM_UI_UPDATE_INTERVAL_MS) {
+      flush();
+      return;
+    }
+    if (trailingTimer === null) {
+      trailingTimer = setTimeout(flush, STREAM_UI_UPDATE_INTERVAL_MS - elapsed);
+    }
+  };
+
+  return { emit, flush };
+};
+
 // Stream chat response from backend API
 export const streamChatResponse = async (
   sessionId: string,
@@ -564,6 +608,8 @@ export const streamChatResponse = async (
   onOutputBlocks?: (outputBlocks: MessageOutputBlock[]) => void,
   toolConfirmationController?: ToolConfirmationController,
 ): Promise<string> => {
+  const throttledChunkEmitter = createThrottledChunkEmitter(onChunk);
+  onChunk = throttledChunkEmitter.emit;
   const enableDestructiveToolConfirmation =
     useSettingsStore.getState().system?.enableDestructiveToolConfirmation ===
     true;
@@ -1374,8 +1420,8 @@ export const streamChatResponse = async (
     }
 
     return committedContent;
-  } catch (error) {
-    throw error;
+  } finally {
+    throttledChunkEmitter.flush();
   }
 };
 
