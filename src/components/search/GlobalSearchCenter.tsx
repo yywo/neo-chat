@@ -48,9 +48,11 @@ import { GLOBAL_SEARCH_LIMITS } from "@/config/limits";
 import { useChatStore } from "@/store/core/chatStore";
 import { useKnowledgeStore } from "@/store/core/knowledgeStore";
 import { useMemoryStore } from "@/store/core/memoryStore";
+import { GlobalSearchModalFrame } from "./GlobalSearchModalFrame";
 
 export interface GlobalSearchCenterProps {
   onClose: () => void;
+  returnFocusRef?: React.RefObject<HTMLElement | null>;
   onNavigate: (
     target: GlobalSearchNavigationTarget,
   ) => boolean | void | Promise<boolean | void>;
@@ -190,6 +192,7 @@ function mergeSourceIndexes(indexes: GlobalSearchIndex[]): GlobalSearchIndex {
 
 const GlobalSearchCenter = ({
   onClose,
+  returnFocusRef,
   onNavigate,
 }: GlobalSearchCenterProps) => {
   const t = useTranslations("GlobalSearch");
@@ -404,14 +407,11 @@ const GlobalSearchCenter = ({
   const phaseLabel = progress ? t(SOURCE_LABEL_KEYS[progress.phase]) : "";
 
   return (
-    <section
-      aria-labelledby="global-search-title"
-      onKeyDown={(event) => {
-        if (event.key !== "Escape") return;
-        event.preventDefault();
-        onClose();
-      }}
-      className="flex h-full min-h-0 flex-1 flex-col bg-background text-foreground"
+    <GlobalSearchModalFrame
+      labelledBy="global-search-title"
+      initialFocusRef={inputRef}
+      returnFocusRef={returnFocusRef}
+      onClose={onClose}
     >
       <header className="border-b border-border px-4 py-4 md:px-8">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-4">
@@ -444,7 +444,6 @@ const GlobalSearchCenter = ({
             />
             <input
               ref={inputRef}
-              autoFocus
               type="text"
               inputMode="search"
               role="combobox"
@@ -906,7 +905,7 @@ const GlobalSearchCenter = ({
           </div>
         </div>
       </div>
-    </section>
+    </GlobalSearchModalFrame>
   );
 };
 

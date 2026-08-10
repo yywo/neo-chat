@@ -3,6 +3,16 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("ChatApp first screen composition", () => {
+  it("does not render session token or context budget controls", () => {
+    const chatAppShell = readFileSync(
+      resolve(process.cwd(), "src/components/app/ChatAppShell.tsx"),
+      "utf8",
+    );
+
+    expect(chatAppShell).not.toContain("SessionUsageSummary");
+    expect(chatAppShell).not.toContain("contextWindow");
+  });
+
   it("does not load random assistant recommendations for the empty chat screen", () => {
     const chatApp = readFileSync(
       resolve(process.cwd(), "src/components/app/ChatApp.tsx"),

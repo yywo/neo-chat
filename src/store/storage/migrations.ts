@@ -1,5 +1,12 @@
-import { Message, MessageOutputBlock, ToolCall } from "@/types";
+import {
+  Message,
+  MessageOutputBlock,
+  SessionMessageTree,
+  ToolCall,
+} from "@/types";
 import { normalizeSearchSettings } from "@/lib/settings/searchRag";
+import { parseTaskPlan } from "@/lib/agent/taskPlan";
+import { ATTACHMENT_LIMITS } from "@/config/limits";
 
 function normalizeStringList(value: unknown, maxItems: number): string[] {
   if (!Array.isArray(value)) return [];
@@ -55,6 +62,11 @@ export function normalizeToolCall(toolCall: Partial<ToolCall>): ToolCall {
       message: "Tool confirmation was interrupted before a decision.",
     },
   };
+  const resultImages = Array.isArray(toolCall.resultImages)
+    ? toolCall.resultImages
+        .slice(0, ATTACHMENT_LIMITS.maxCount)
+        .map((image) => ({ ...image }))
+    : undefined;
 
   return {
     id: toolCall.id || `tool_${Date.now()}`,
@@ -65,6 +77,7 @@ export function normalizeToolCall(toolCall: Partial<ToolCall>): ToolCall {
     args: toolCall.args ?? {},
     status,
     result: interruptedConfirmation ? interruptedResult : toolCall.result,
+    ...(resultImages?.length ? { resultImages } : {}),
     isError: interruptedConfirmation ? true : toolCall.isError,
     risk: toolCall.risk,
     confirmation,
@@ -98,13 +111,36 @@ export function normalizeMessage(message: Message): Message {
             : {}),
         }
       : undefined;
-  const normalizedBlocks = message.outputBlocks?.map((block) => {
-    if (block.type !== "tool_group") return block;
-    return {
-      ...block,
-      toolCalls: block.toolCalls.map((toolCall) => normalizeToolCall(toolCall)),
-    } satisfies MessageOutputBlock;
-  });
+  let normalizedBlocks: MessageOutputBlock[] | undefined;
+  if (Array.isArray(message.outputBlocks)) {
+    normalizedBlocks = [];
+    for (const block of message.outputBlocks) {
+      if (block.type === "task_plan") {
+        const parsed = parseTaskPlan({
+          steps: block.steps,
+          note: block.note,
+        });
+        if (!parsed.ok) continue;
+        const { note: _note, ...blockWithoutNote } = block;
+        void _note;
+        normalizedBlocks.push({
+          ...blockWithoutNote,
+          ...parsed.plan,
+        });
+        continue;
+      }
+      if (block.type !== "tool_group") {
+        normalizedBlocks.push(block);
+        continue;
+      }
+      normalizedBlocks.push({
+        ...block,
+        toolCalls: block.toolCalls.map((toolCall) =>
+          normalizeToolCall(toolCall),
+        ),
+      });
+    }
+  }
 
   if (!message.toolCalls?.length && !normalizedBlocks && !memoryContext) {
     return message;
@@ -129,6 +165,25 @@ export function normalizeMessage(message: Message): Message {
 
 export function normalizeMessages(messages: Message[] | null | undefined) {
   return (messages || []).map((message) => normalizeMessage(message));
+}
+
+export function normalizeMessageTreeMessages(
+  tree: SessionMessageTree,
+): SessionMessageTree {
+  const nodesById: SessionMessageTree["nodesById"] = {};
+  for (const [id, node] of Object.entries(tree.nodesById)) {
+    nodesById[id] = {
+      ...node,
+      message: normalizeMessage(node.message),
+      childMessageIds: [...node.childMessageIds],
+    };
+  }
+
+  return {
+    ...tree,
+    nodesById,
+    rootMessageIds: [...tree.rootMessageIds],
+  };
 }
 
 export function migrateSearchSettings(search: any) {

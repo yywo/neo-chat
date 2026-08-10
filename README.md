@@ -17,34 +17,45 @@
   <a href="https://github.com/u14app/neo-chat/actions/workflows/docker.yml"><img alt="Docker" src="https://github.com/u14app/neo-chat/actions/workflows/docker.yml/badge.svg" /></a>
   <img alt="Next.js" src="https://img.shields.io/badge/Next.js-16-black" />
   <img alt="React" src="https://img.shields.io/badge/React-19-149eca" />
-  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178c6" />
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-6-3178c6" />
 </p>
 
-Neo Chat is a self-hostable, local-first AI chat application built with Next.js, React, TypeScript, and Zustand. It brings multi-provider chat, assistant presets, text-only Skills, OpenAPI-style plugin tools, remote streamable HTTP MCP servers, web and local global search, knowledge-base RAG, versioned backup and restore, local memory, voice, generated media, rich message rendering, citations, and editable artifacts into one clean workspace.
+Neo Chat is a self-hostable, local-first AI chat application built with Next.js, React, TypeScript, and Zustand. It brings multi-provider chat, assistant presets, text-only Skills, OpenAPI-style plugin tools, remote MCP servers and an optional local stdio bridge, web and local global search, knowledge-base RAG, opt-in encrypted cross-device sync, versioned backup and restore, local memory, an offline PWA, voice, generated media, rich message rendering, citations, and editable artifacts into one clean workspace.
 
 It is designed for people who want the power of modern AI workspaces without giving up local data ownership. Chat history, workspace metadata, skills, plugin configuration, memories, search indexes, and files stay in the browser by default; server routes act as controlled proxies for model providers, web search, RAG, document parsing, voice, plugin and MCP execution, and deployment health.
 
-## v2.3.0 Highlights
+## v2.4.0 Highlights
 
-- Added a local global search center for active conversation branches,
-  attachments, workspaces, knowledge, and memories, with filters, incremental
-  indexing, direct navigation, and `Ctrl`/`Cmd` + `K` access.
-- Added version 3 ZIP backup and transactional restore for local app data and
-  referenced OPFS files, with integrity checks, rollback recovery, legacy
-  version 2 JSON compatibility, and deliberate credential exclusion.
-- Expanded knowledge-base recovery with preserved originals, editable extracted
-  content, separate storage/index states, and retry, reparse, reindex,
-  cancellation, reconciliation, and per-file concurrency protection.
-- Added optional destructive-tool approval with allow-once or deny decisions,
-  plus risk floors, argument redaction, stable function fingerprints,
-  non-destructive chat-scoped approvals, and fail-closed server validation for
-  plugin and MCP execution.
-- Made marketplace and deployment failures visible, unified effective search
-  capability, kept Firecrawl usable without an API key, and supported trusted
-  user-configured HTTP/private-network endpoints in self-hosted deployments.
-- Fixed OpenAI Responses multi-turn history, cross-origin image display/export,
-  model-message download progress, search-setting persistence, restore/clear
-  write races, and added import hygiene plus isolated Playwright E2E coverage.
+- Added an opt-in, end-to-end encrypted personal vault for convergent WebDAV or
+  S3/MinIO synchronization across devices. Recovery keys, credentials, local
+  baselines, search caches, and vectors never enter remote objects or ZIP files.
+- Added virtualized long-chat timelines, durable streaming checkpoints, bounded
+  retry before visible output, partial-output continuation, reply snapshots, and
+  explicit model selection when regenerating a sibling branch.
+- Added per-chat composer drafts, token and context usage summaries, guarded
+  message-tree mutations during generation, and clearer offline behavior.
+- Added per-chat Agent mode for tool-call-capable models, with five localized,
+  read-only built-ins orchestrated by the browser and auto-approved at runtime.
+- Added parameterized Skills and ordered bundles of up to four Skills, with
+  validated slot values and reproducible invocation metadata.
+- Added collection-level chunking controls, Markdown heading-aware previews,
+  explicit reindexing, hybrid lexical/vector retrieval, graceful lexical
+  fallback, stable source previews, file filtering, and serial batch operations.
+- Added configurable client-side image compression for conversation, workspace,
+  generated, and plugin images, with cancellation and original-file fallback.
+- Added legacy SSE compatibility for remote MCP, connection-stage-only fallback,
+  encrypted install-time credentials, and an authenticated Docker stdio bridge
+  whose commands remain fixed by deployment configuration.
+- Added a local-only offline PWA with strict no-API-cache boundaries, an
+  accessible global-search modal, localized settings search and first-run model
+  guidance, plus read-only local storage health diagnostics.
+- Scoped custom model metadata and locally encrypted server-default credentials
+  to the matching provider, with fail-closed handling for invalid or unavailable
+  defaults.
+- Preserved existing version 3 ZIP compatibility while advancing the local
+  schema to version 6 and adding English, Chinese, and Japanese UI coverage.
+
+See [CHANGELOG.md](CHANGELOG.md) for the complete release notes.
 
 ## v2.2.0 Highlights
 
@@ -72,23 +83,54 @@ It is designed for people who want the power of modern AI workspaces without giv
 
 ## Features
 
-- Multi-provider chat with Google, Anthropic, OpenAI, and OpenAI-compatible endpoints.
+- Multi-provider chat with Google, Anthropic, OpenAI, and OpenAI-compatible
+  endpoints, including provider-scoped custom model capabilities.
 - Native image generation and image editing for models whose metadata exposes image output/input, with ordered mixed text/image message blocks and OPFS-backed Blob URL display caching.
-- Local-first sessions, branches, pinned chats, workspaces, workspace files, and assistant instructions.
+- Configurable client-side compression for supported uploaded and generated
+  images before storage or model use, with long-image safeguards and safe
+  original-file fallback.
+- Local-first sessions, branches, pinned chats, per-chat composer drafts, reply
+  navigation, token/context usage summaries, workspaces, workspace files, and
+  assistant instructions.
+- Opt-in, end-to-end encrypted WebDAV or S3/MinIO synchronization with local
+  device identity, recovery code, convergent CRDT documents, and encrypted OPFS
+  chunks.
 - Assistant presets from the LobeHub agent registry plus local custom assistants.
-- Text-only Skills with localized public catalogs, install/uninstall flows, local edits, custom skills, auto-selection, and workspace presets.
-- OpenAPI-based plugin tools plus remote streamable HTTP MCP servers, with per-plugin authentication, server-side execution, transport-derived risk floors, and optional confirmation for destructive calls.
+- Per-chat Agent mode for tool-call-capable models, with browser-orchestrated
+  web search, knowledge search, text-only skill loading, sandboxed JavaScript,
+  and task-plan updates.
+- Parameterized text Skills with localized public catalogs, install/uninstall
+  flows, local edits, custom skills, auto-selection, workspace presets, and
+  ordered non-nested bundles of up to four Skills.
+- OpenAPI-based plugin tools plus remote Streamable HTTP and legacy SSE MCP
+  servers, with encrypted install-time credentials, persisted transport
+  selection, per-plugin authentication, server-side execution,
+  transport-derived risk floors, optional confirmation for destructive calls,
+  and an authenticated Docker bridge for allowlisted local stdio servers.
 - Built-in tools for web reading, weather, Unsplash search, Agnes/Google image processing, OpenAI-compatible image processing, OpenAI Responses image processing, and Agnes video generation. Agnes image processing supports image-to-image edits, and Agnes video generation supports public image URL to video plus plugin-level model IDs. Image processing plugins remain separate from native model image output.
 - Web search through Google native Google Search, OpenAI Web Search, or external providers such as Tavily, Firecrawl, Exa, Bocha, and SearXNG.
-- Local global search across active chat branches, attachments, workspaces, knowledge, and memories, with source/date/role filters and direct result navigation.
-- Knowledge-base RAG with preserved original files, editable extracted content, Mineru/LlamaParse document parsing, optional vector indexing, and recovery actions for failed parsing or indexing.
-- Versioned ZIP backup and transactional restore for local metadata and referenced OPFS files, excluding credentials and external service data.
+- Local global search in an accessible modal across active chat branches,
+  attachments, workspaces, knowledge, and memories, with source/date/role
+  filters and direct result navigation; Settings has its own localized search.
+- Knowledge-base RAG with preserved original files, editable extracted content,
+  configurable Markdown-aware chunking, hybrid lexical/vector retrieval,
+  Mineru/LlamaParse document parsing, filename/status filters, serial batch
+  actions, and recovery controls for failed parsing or indexing.
+- Versioned ZIP backup and transactional restore for local metadata and
+  referenced OPFS files, excluding credentials and external service data, plus
+  read-only quota and OPFS reference diagnostics.
+- Installable offline PWA for local deployments, with read-only history, local search, knowledge access, and backup export; hosted deployments unregister it.
 - Local memory with optional memory search, background extraction, and dream consolidation.
 - Voice input and output through browser APIs, ElevenLabs, Mimo, or compatible configured providers.
 - Rich message rendering for Markdown, safe inline HTML visual blocks, GFM tables, math, code highlighting, Mermaid diagrams, mind maps, citations, reasoning, tool calls, images, audio, and artifacts.
-- Local BYOK encryption for user-entered provider, plugin, search, RAG, and voice secrets.
+- Local BYOK encryption for user-entered provider, plugin, MCP, search, RAG, and
+  voice secrets, with fail-closed server-default provider validation.
 - Deployment health checks for BYOK, access password, shared stores, default model, search, RAG, and voice readiness.
 - Docker and Cloudflare Workers deployment paths.
+
+See [End-to-end encrypted sync](docs/encrypted-sync.md),
+[MCP stdio bridge](docs/mcp-stdio-bridge.md), and
+[Offline PWA](docs/offline-pwa.md) for deployment and trust-boundary details.
 
 ## Screenshots
 
@@ -247,8 +289,13 @@ See [Deployment Hardening](docs/deployment-hardening.md) for production configur
 
 Neo Chat is local-first by default:
 
-- Core settings, provider records, selected models, and provider API keys are stored in browser `localStorage`.
-- Chat metadata, messages, app settings, installed plugins, installed/custom skills, skill catalog caches, assistants, knowledge metadata, and local memories are stored in IndexedDB through `localforage`.
+- Core settings, provider records, selected models, per-chat composer drafts,
+  and locally encrypted provider credential envelopes are stored in browser
+  `localStorage`.
+- Chat metadata, messages, app settings, installed plugins, installed/custom
+  skills, skill catalog caches, assistants, knowledge metadata, local memories,
+  encrypted sync configuration, and CRDT baselines are stored in IndexedDB
+  through `localforage`.
 - Uploaded chat and workspace files, knowledge originals and extracted text, and image display-cache copies are stored in browser OPFS. Runtime `blob:` URLs remain temporary; version 3 ZIP backups bundle referenced app-owned OPFS files while excluding credentials and remote service data.
 - User-entered secrets are encrypted in the browser as BYOK envelopes before being sent to API routes.
 
@@ -284,6 +331,14 @@ DEFAULT_PROVIDER_BASE_URL=""
 DEFAULT_PROVIDER_API_KEY="provider-key"
 DEFAULT_PROVIDER_MODELS="model-a,model-b"
 ```
+
+A server-default provider is exposed only when the deployment supplies related
+`DEFAULT_PROVIDER_*` or `DEFAULT_MODEL_*` configuration. The deployment API key
+may remain empty so each browser can save its own encrypted credential; that
+credential is reused only while its provider type matches the active server
+default. Missing or mismatched server defaults fail closed. Custom Base URLs are
+validated before they are saved while trusted self-hosted HTTP/private targets
+remain supported.
 
 `DEFAULT_PROVIDER_MODELS` supports multiple formats:
 
@@ -366,17 +421,19 @@ For the full template, see [.env.example](.env.example).
 
 ```mermaid
 flowchart LR
-  Browser["Browser app\nReact + Zustand"] --> LocalStorage["localStorage\nproviders + settings"]
-  Browser --> IndexedDB["IndexedDB\nsessions + plugins + skills + knowledge + memories"]
-  Browser --> OPFS["OPFS\nuploads + workspace files"]
+  Browser["Browser app\nReact + Zustand"] --> LocalStorage["localStorage\nproviders + encrypted secrets + drafts"]
+  Browser --> IndexedDB["IndexedDB\nsessions + plugins + skills + knowledge + memories + sync"]
+  Browser --> OPFS["OPFS\nuploads + originals + image cache"]
   Browser --> ApiRoutes["Next.js API routes"]
   ApiRoutes --> Providers["Model providers\nGoogle / Anthropic / OpenAI / compatible"]
   ApiRoutes --> Search["Search providers"]
   ApiRoutes --> Rag["RAG + document services"]
-  ApiRoutes --> Plugins["Plugin APIs"]
+  ApiRoutes --> Plugins["Plugin + MCP endpoints"]
+  ApiRoutes --> Sync["WebDAV / S3"]
   ApiRoutes --> Voice["Voice providers"]
   ApiRoutes --> Health["Deployment health"]
   Browser -. encrypted BYOK envelopes .-> ApiRoutes
+  Browser -. encrypted sync objects .-> ApiRoutes
 ```
 
 The app keeps durable user data in browser storage whenever possible. API routes provide:
@@ -384,7 +441,8 @@ The app keeps durable user data in browser storage whenever possible. API routes
 - provider request normalization and streaming;
 - BYOK decryption on the server side;
 - URL safety gates for proxied upstreams;
-- plugin execution through registered plugin IDs and function names;
+- plugin and MCP execution through registered plugin IDs and function names;
+- encrypted WebDAV/S3 sync proxying without server-side key persistence;
 - deployment health reporting through `/api/health`;
 - hosted-mode checks for shared stores and fixed-service network boundaries.
 
@@ -392,11 +450,58 @@ The app keeps durable user data in browser storage whenever possible. API routes
 
 Skills are text-only prompt-context modules. The app loads localized metadata catalogs from `public/data/skills`, fetches full skill definitions only when needed, and stores installed, edited, and custom skills locally. Active skills can be selected manually, inherited from workspace presets, or auto-selected for a message.
 
-Plugins are executable tools installed from OpenAPI manifests, built-in definitions, or remote streamable HTTP MCP servers discovered from the official MCP Registry. Enabled plugin functions are exposed to compatible models as tools, then executed by the server-side plugin route. MCP v1 support is remote-only: stdio, npm, Docker, local process transports, and OAuth login flows are intentionally out of scope. User-configured MCP server URLs may use HTTP or HTTPS and may target localhost or private networks in either deployment mode; the official Registry remains HTTPS-only. Built-in image processing plugin results stay in the tool details and compact conversation history, so the model can decide whether and how to reference generated or edited images in its follow-up message. OpenAI-compatible Images API and OpenAI Responses image processing are separate plugins so their credentials and activation can be managed independently. Supported built-in media plugins expose plugin-level API Base URL and Model ID fields, optional image count parameters, Agnes image-to-image editing, and Agnes video generation from a public HTTPS image URL while keeping Agnes video as the explicit `create_video` / `get_video_result` two-step flow. Tool-call orchestration uses a high but bounded loop limit to avoid runaway recursive calls while still allowing multi-step tasks.
+Agent mode is an opt-in, per-chat client-side orchestration mode for models that
+support tool calls. Its five built-ins (`web_search`, `search_knowledge`,
+`load_skill`, `run_javascript`, and `update_task_plan`) are read-only and
+auto-approved. JavaScript runs synchronously in a bounded browser sandbox
+without network or DOM access, and loaded Skills remain text-only. Agent web
+search requires an external search provider; native Google Search and OpenAI
+Web Search are not combined with Agent function calling.
 
-Search can run through Google native Google Search, OpenAI Web Search, or external providers for other model families including Anthropic. Firecrawl's public service works without an API key; a key only raises its request rate. The separate local global search center indexes active chat branches, attachments, workspaces, knowledge, and memories in browser memory and excludes reasoning, tool payloads, and credentials.
+Plugins are executable tools installed from OpenAPI manifests, built-in
+definitions, or remote MCP servers discovered from the official MCP Registry.
+Enabled functions are exposed to compatible models as tools, then executed by
+the server-side plugin route. Remote MCP supports Streamable HTTP and legacy
+SSE, preferring Streamable HTTP and falling back to SSE only when connection
+setup returns 404 or 405; authentication and other failures are not retried
+across transports. The negotiated transport is saved for later tool calls.
+Registry entries that require header credentials prompt before discovery and
+store the value as a local encrypted secret. Local Docker users may expose
+preconfigured stdio servers through the separate authenticated
+[MCP stdio bridge](docs/mcp-stdio-bridge.md). User-configured MCP URLs may use
+HTTP or HTTPS and may target localhost or private networks in either deployment
+mode; the official Registry remains HTTPS-only.
 
-Knowledge-base RAG preserves uploaded originals separately from editable or indexable extracted text, optionally parses documents with Mineru or LlamaParse, and can index chunks into an external vector service. Failed files can be retried, reparsed, reindexed, cancelled, or reconciled without discarding a usable original.
+Built-in image processing plugin results stay in the tool details and compact
+conversation history, so the model can decide whether and how to reference
+generated or edited images in its follow-up message. OpenAI-compatible Images
+API and OpenAI Responses image processing are separate plugins so their
+credentials and activation can be managed independently. Supported built-in
+media plugins expose plugin-level API Base URL and Model ID fields, optional
+image count parameters, Agnes image-to-image editing, and Agnes video generation
+from a public HTTPS image URL while keeping Agnes video as the explicit
+`create_video` / `get_video_result` two-step flow. Tool-call orchestration uses a
+high but bounded loop limit to avoid runaway recursive calls while still
+allowing multi-step tasks.
+
+Search can run through Google native Google Search, OpenAI Web Search, or
+external providers for other model families including Anthropic. When Agent
+mode is active, select an external provider to expose `web_search`; native
+search configurations are not combined with Agent function calling.
+Firecrawl's public service works without an API key, honors the selected time
+range, and uses a key only to raise its request rate. The separate global search
+modal indexes active chat branches, attachments, workspaces, knowledge, and
+memories in browser memory while excluding reasoning, tool payloads, and
+credentials. Settings provides its own localized keyboard-navigable search.
+
+Knowledge-base RAG preserves uploaded originals separately from editable or
+indexable extracted text, supports Markdown-aware or recursive chunking with
+hybrid lexical/vector retrieval, optionally parses documents with Mineru or
+LlamaParse, and can index chunks into an external vector service. Files can be
+filtered by name or status and processed through serial retry, reindex,
+download, or confirmed-delete batches with per-file results. Failed operations
+can still be retried, reparsed, cancelled, or reconciled without discarding a
+usable original.
 
 Voice workflows support browser speech APIs and configured external providers. Set `DEFAULT_VOICE_PROVIDER` to `elevenlabs` or `mimo` to enable a server default; leaving it empty keeps browser-native speech as the default. Empty default model values disable the matching STT or TTS capability, and the UI can store user-specific secrets locally.
 
@@ -408,7 +513,12 @@ Neo Chat is self-hosting friendly, not a turnkey public SaaS security boundary.
 
 - User-configured provider, search, RAG, plugin, and MCP targets may use HTTP and private-network addresses in either deployment mode.
 - Fixed registries and built-in service targets retain their HTTPS and host allowlists; HTTP media proxying remains controlled by `ALLOW_LOCAL_NETWORK_PROXY`.
+- Sync objects are encrypted in the browser with opaque remote names; recovery
+  material, credentials, local baselines, and device identity are excluded from
+  remote objects and ZIP exports.
 - BYOK envelopes prevent plain user-entered secrets from being sent in request bodies.
+- Server-default provider credentials are locally encrypted, provider-bound,
+  and rejected when the deployment default is unavailable or has changed type.
 - API schemas reject unknown high-risk fields and oversized payloads.
 - Plugin execution remains server-proxied and validated. Tool calls run automatically by default; an optional System setting pauses only destructive calls for one-time approval or denial. Destructive approval is never persisted for the chat.
 - `ACCESS_PASSWORD` is a deployment gate, not an account system.

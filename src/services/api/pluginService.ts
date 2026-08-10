@@ -1,6 +1,6 @@
 import { Plugin } from "@/types";
 import { useSettingsStore } from "@/store/core/settingsStore";
-import { encryptSecret } from "@/lib/byok/client";
+import { encryptSecret, fetchWithByokRetry } from "@/lib/byok/client";
 import { BYOK_CONTEXTS } from "@/lib/byok/shared";
 import {
   getResponseErrorMessage,
@@ -34,6 +34,20 @@ export interface CustomMcpServerInstallInput {
   name: string;
   serverUrl: string;
   bearerToken?: string;
+  source?: "custom" | "bridge";
+}
+
+export interface BridgeDiscoveryInput {
+  manifestUrl: string;
+  bearerToken: string;
+}
+
+export interface BridgeDiscoveredServer {
+  id: string;
+  label: string;
+  source: "bridge";
+  transport: "streamable-http";
+  serverUrl: string;
 }
 
 export interface McpServerPageOptions {
@@ -182,6 +196,7 @@ function createCustomMcpPlugin(input: CustomMcpServerInstallInput): Plugin {
       : { type: "none", required: false },
     mcp: {
       transport: "streamable-http",
+      source: input.source || "custom",
       serverUrl,
       serverName: title,
       serverVersion: "custom",
@@ -552,14 +567,43 @@ export const clearPluginsCache = (): void => {
   logDevInfo("Plugins cache cleared");
 };
 
-export const installPlugin = async (plugin: Plugin): Promise<Plugin> => {
+export const installPlugin = async (
+  plugin: Plugin,
+  authValue?: string,
+): Promise<Plugin> => {
+  const normalizedAuthValue = authValue?.trim();
+  const valueSecret = normalizedAuthValue
+    ? await encryptSecret(
+        normalizedAuthValue,
+        BYOK_CONTEXTS.pluginAuth(plugin.id),
+      )
+    : undefined;
+  const authConfig = valueSecret
+    ? {
+        type:
+          plugin.auth?.type === "apiKey"
+            ? ("apiKey" as const)
+            : plugin.auth?.type === "oauth2"
+              ? ("oauth2" as const)
+              : ("bearer" as const),
+        key:
+          plugin.auth?.name ||
+          (plugin.auth?.type === "apiKey" ? "X-API-Key" : "Authorization"),
+        addTo: plugin.auth?.in || ("header" as const),
+        valueSecret,
+      }
+    : undefined;
+
   try {
     const response = await signedApiFetch("/api/plugins/install", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ plugin }),
+      body: JSON.stringify({
+        plugin,
+        ...(authConfig ? { authConfig } : {}),
+      }),
     });
 
     if (!response.ok) {
@@ -656,4 +700,81 @@ export const installCustomMcpServer = async (
     logDevError(`Failed to install custom MCP server ${plugin.id}:`, error);
     throw error;
   }
+};
+
+function parseBridgeDiscoveryResponse(
+  value: unknown,
+): BridgeDiscoveredServer[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid MCP bridge discovery response");
+  }
+  const servers = (value as { servers?: unknown }).servers;
+  if (!Array.isArray(servers) || servers.length > 32) {
+    throw new Error("Invalid MCP bridge discovery response");
+  }
+
+  return servers.map((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("Invalid MCP bridge server descriptor");
+    }
+    const server = value as Record<string, unknown>;
+    if (
+      typeof server.id !== "string" ||
+      typeof server.label !== "string" ||
+      server.source !== "bridge" ||
+      server.transport !== "streamable-http" ||
+      typeof server.serverUrl !== "string"
+    ) {
+      throw new Error("Invalid MCP bridge server descriptor");
+    }
+
+    return {
+      id: server.id,
+      label: server.label,
+      source: "bridge",
+      transport: "streamable-http",
+      serverUrl: server.serverUrl,
+    };
+  });
+}
+
+export const discoverMcpBridgeServers = async (
+  input: BridgeDiscoveryInput,
+): Promise<BridgeDiscoveredServer[]> => {
+  const manifestUrl = input.manifestUrl.trim();
+  const bearerToken = input.bearerToken.trim();
+  if (!manifestUrl || !bearerToken) {
+    throw new Error("Bridge manifest URL and bearer token are required");
+  }
+
+  const response = await fetchWithByokRetry(async () => {
+    const tokenSecret = await encryptSecret(
+      bearerToken,
+      BYOK_CONTEXTS.bridgeDiscovery,
+    );
+    if (!tokenSecret) {
+      throw new Error("Bridge bearer token is required");
+    }
+
+    return signedApiFetch("/api/plugins/mcp-bridge/discover", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ manifestUrl, tokenSecret }),
+    });
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      await getResponseErrorMessage(
+        response,
+        "Failed to discover MCP bridge servers",
+      ),
+    );
+  }
+
+  const data = await readJsonResponseOrThrow<unknown>(
+    response,
+    "Failed to discover MCP bridge servers",
+  );
+  return parseBridgeDiscoveryResponse(data);
 };

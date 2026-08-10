@@ -5,6 +5,7 @@ import type {
   RAGConfig,
   SearchProviderID,
   SearchServiceConfig,
+  SearchTimeRange,
 } from "@/types";
 import { isLocalEncryptedSecretEnvelope } from "../security/localSecrets";
 import { hasSearchApiKey } from "../security/localSecretResolvers";
@@ -105,6 +106,16 @@ export const isSearchProviderID = (
 
 export const normalizeSearchProvider = (provider: unknown): SearchProviderID =>
   isSearchProviderID(provider) ? provider : DEFAULT_SEARCH_PROVIDER;
+
+export const normalizeSearchTimeRange = (
+  timeRange: unknown,
+): SearchTimeRange =>
+  timeRange === "day" ||
+  timeRange === "week" ||
+  timeRange === "month" ||
+  timeRange === "year"
+    ? timeRange
+    : "any";
 
 export const isDocumentParseProvider = (
   provider: unknown,
@@ -362,6 +373,7 @@ export const normalizeSearchSettings = (
 ): {
   provider: SearchProviderID;
   resultsLimit: number;
+  timeRange: SearchTimeRange;
   configs: Record<string, SearchServiceConfig>;
 } => {
   const rawSearch =
@@ -369,6 +381,7 @@ export const normalizeSearchSettings = (
       ? (search as {
           provider?: unknown;
           resultsLimit?: unknown;
+          timeRange?: unknown;
           configs?: Record<string, unknown>;
         })
       : {};
@@ -380,6 +393,7 @@ export const normalizeSearchSettings = (
   return {
     provider: normalizeSearchProvider(rawSearch.provider),
     resultsLimit: normalizeSearchResultsLimit(rawSearch.resultsLimit),
+    timeRange: normalizeSearchTimeRange(rawSearch.timeRange),
     configs: {
       default: {
         serverAvailable: rawDefaultConfig.serverAvailable === true,

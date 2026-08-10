@@ -4,6 +4,7 @@ import {
   getAttachmentSourceFingerprint,
   resolveAttachmentDisplayBlobUrl,
   stripAttachmentDisplayCacheForModel,
+  stripMessageDisplayCacheForModel,
 } from "../lib/utils/imageDisplayCache";
 import type { Attachment } from "../types";
 
@@ -171,5 +172,40 @@ describe("image display cache", () => {
     });
     expect(converted).toMatchObject({ data: "bGVnYWN5" });
     expect(converted).not.toHaveProperty("url");
+  });
+
+  it("removes display-only tool result images from model history", async () => {
+    const toolCall = {
+      id: "call_1",
+      name: "generate_image",
+      args: {},
+      status: "success" as const,
+      result: { imageBase64: "[image omitted]", imageCount: 1 },
+      resultImages: [imageAttachment()],
+    };
+
+    const stripped = await stripMessageDisplayCacheForModel({
+      id: "message_1",
+      role: "model",
+      content: "Generated.",
+      timestamp: 1,
+      toolCalls: [toolCall],
+      outputBlocks: [
+        {
+          id: "tools_1",
+          type: "tool_group",
+          toolCalls: [toolCall],
+        },
+      ],
+    });
+
+    expect(stripped.toolCalls?.[0]).not.toHaveProperty("resultImages");
+    const toolGroup = stripped.outputBlocks?.find(
+      (block) => block.type === "tool_group",
+    );
+    expect(toolGroup?.type).toBe("tool_group");
+    if (toolGroup?.type === "tool_group") {
+      expect(toolGroup.toolCalls[0]).not.toHaveProperty("resultImages");
+    }
   });
 });

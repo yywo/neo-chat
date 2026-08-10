@@ -41,18 +41,21 @@ export function useModalLifecycle({
   open,
   dialogRef,
   initialFocusRef,
+  returnFocusRef,
 }: {
   open: boolean;
   dialogRef: RefObject<HTMLElement | null>;
   initialFocusRef?: RefObject<HTMLElement | null>;
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }) {
   useEffect(() => {
     if (!open) return;
 
     const previousFocus =
-      document.activeElement instanceof HTMLElement
+      returnFocusRef?.current ||
+      (document.activeElement instanceof HTMLElement
         ? document.activeElement
-        : null;
+        : null);
     const previousOverflow = document.body.style.overflow;
     const previousOverscrollBehavior = document.body.style.overscrollBehavior;
     document.body.style.overflow = "hidden";
@@ -71,5 +74,5 @@ export function useModalLifecycle({
         previousFocus.focus({ preventScroll: true });
       }
     };
-  }, [dialogRef, initialFocusRef, open]);
+  }, [dialogRef, initialFocusRef, open, returnFocusRef]);
 }

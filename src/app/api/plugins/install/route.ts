@@ -6,7 +6,7 @@ import {
 import { PluginInstallSchema } from "@/lib/api/schemas";
 import { safeFetchJson } from "@/lib/security/safeFetch";
 import { getSafeUrlPolicy } from "@/lib/security/urlPolicy";
-import { listMcpTools } from "@/lib/mcp/client";
+import { discoverMcpTools } from "@/lib/mcp/client";
 import { convertOpenApiSpecToPlugin } from "@/lib/plugin/openapi";
 import { registerServerPlugin } from "@/lib/plugin/serverRegistry";
 import { safeServerLogError } from "@/lib/utils/safeServerLog";
@@ -160,8 +160,9 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        const tools = await listMcpTools({
+        const discovery = await discoverMcpTools({
           serverUrl: trustedPlugin.mcp.serverUrl,
+          transport: trustedPlugin.mcp.transport,
           staticHeaders: trustedPlugin.mcp.headers,
           ...(authValue
             ? {
@@ -188,7 +189,7 @@ export async function POST(request: NextRequest) {
         });
         const functions = normalizeMcpToolFunctions(
           trustedPlugin.mcp.serverName,
-          tools,
+          discovery.tools,
         );
 
         if (functions.length === 0) {
@@ -218,6 +219,7 @@ export async function POST(request: NextRequest) {
           functions,
           mcp: {
             ...trustedPlugin.mcp,
+            transport: discovery.transport,
             toolNameMap,
           },
         };

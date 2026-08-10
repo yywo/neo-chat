@@ -20,6 +20,7 @@ describe("search and RAG settings normalization", () => {
 
     expect(search.provider).toBe("firecrawl");
     expect(search.resultsLimit).toBe(SEARCH_CONFIG_LIMITS.maxResultsLimit);
+    expect(search.timeRange).toBe("any");
     expect(search.configs.tavily.apiKey).toBe("key");
     expect(search.configs.searxng.baseUrl).toBe("http://localhost:8080");
     expect(search.configs).not.toHaveProperty("injected");
@@ -29,7 +30,17 @@ describe("search and RAG settings normalization", () => {
     const search = normalizeSearchSettings(undefined);
 
     expect(search.provider).toBe("firecrawl");
+    expect(search.timeRange).toBe("any");
     expect(search.configs.firecrawl.apiKey).toBe("");
+  });
+
+  it("keeps only supported search time ranges", () => {
+    expect(normalizeSearchSettings({ timeRange: "month" }).timeRange).toBe(
+      "month",
+    );
+    expect(normalizeSearchSettings({ timeRange: "custom" }).timeRange).toBe(
+      "any",
+    );
   });
 
   it("trims and caps search API keys and base URLs", () => {

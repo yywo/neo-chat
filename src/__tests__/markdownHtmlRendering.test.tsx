@@ -257,6 +257,7 @@ describe("MarkdownRenderer HTML support", () => {
         content={
           '```html\n<section style="display:grid; gap:8px"><span>Code</span></section>\n```'
         }
+        forceExpandCodeBlocks
       />,
     );
 

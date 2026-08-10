@@ -24,8 +24,9 @@ import {
   Sparkles,
   Trash2,
   X,
+  Layers3,
 } from "lucide-react";
-import type { SkillCatalogEntry, TextSkill } from "@/types";
+import type { SkillBundle, SkillCatalogEntry, TextSkill } from "@/types";
 import { useSettingsStore } from "@/store/core/settingsStore";
 import { normalizeTextSkill } from "@/lib/skills";
 import {
@@ -43,6 +44,8 @@ import { MARKET_LIMITS } from "@/config/limits";
 import { logDevError } from "@/lib/utils/devLogger";
 import type { MarketLoadResult } from "@/lib/market/loadResult";
 import MarketLoadNotice from "@/components/ui/MarketLoadNotice";
+import SkillParameterEditor from "./SkillParameterEditor";
+import SkillBundleEditor from "./SkillBundleEditor";
 
 interface SkillMarketProps {
   onClose: () => void;
@@ -235,6 +238,12 @@ const SkillEditorModal = ({
       setError(t("invalidCustomSkill"));
       return;
     }
+    if (
+      (normalized.parameters || []).length !== (draft.parameters || []).length
+    ) {
+      setError(t("parameters.invalid"));
+      return;
+    }
 
     onSave({
       ...normalized,
@@ -350,6 +359,10 @@ const SkillEditorModal = ({
               className="h-28 w-full resize-none rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 dark:border-border dark:bg-muted"
             />
           </label>
+          <SkillParameterEditor
+            parameters={draft.parameters || []}
+            onChange={(parameters) => updateDraft({ parameters })}
+          />
           <div className="space-y-2 md:col-span-2">
             <label
               htmlFor={tagInputId}
@@ -576,6 +589,12 @@ const SkillMarket: React.FC<SkillMarketProps> = ({ onClose }) => {
     updateInstalledSkill,
     addCustomSkill,
     removeCustomSkill,
+    skillBundles,
+    activeSkillBundleIds,
+    addSkillBundle,
+    updateSkillBundle,
+    removeSkillBundle,
+    toggleSkillBundleActive,
   } = useSettingsStore();
 
   const [builtInSkills, setBuiltInSkills] = useState<SkillCatalogEntry[]>([]);
@@ -592,6 +611,8 @@ const SkillMarket: React.FC<SkillMarketProps> = ({ onClose }) => {
   const [currentPage, setCurrentPage] = useState(1);
   const [editingSkill, setEditingSkill] = useState<TextSkill | undefined>();
   const [showEditor, setShowEditor] = useState(false);
+  const [editingBundle, setEditingBundle] = useState<SkillBundle | undefined>();
+  const [showBundleEditor, setShowBundleEditor] = useState(false);
   const [uninstallConfirmingSkillId, setUninstallConfirmingSkillId] = useState<
     string | null
   >(null);
@@ -702,6 +723,14 @@ const SkillMarket: React.FC<SkillMarketProps> = ({ onClose }) => {
       updateInstalledSkill(skill.id, skill);
     } else {
       addCustomSkill(skill);
+    }
+  };
+
+  const handleSaveBundle = (bundle: SkillBundle) => {
+    if (skillBundles.some((item) => item.id === bundle.id)) {
+      updateSkillBundle(bundle.id, bundle);
+    } else {
+      addSkillBundle(bundle);
     }
   };
 
@@ -847,6 +876,15 @@ const SkillMarket: React.FC<SkillMarketProps> = ({ onClose }) => {
           locale={locale}
         />
       )}
+      {showBundleEditor ? (
+        <SkillBundleEditor
+          bundle={editingBundle}
+          skills={installedSkills}
+          onClose={() => setShowBundleEditor(false)}
+          onSave={handleSaveBundle}
+          onDelete={editingBundle ? removeSkillBundle : undefined}
+        />
+      ) : null}
 
       <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-3 border-b border-gray-200/50 bg-white/40 px-6 py-4 backdrop-blur-md dark:border-border dark:bg-card/40">
         <div className="flex min-w-0 items-center gap-3">
@@ -937,6 +975,103 @@ const SkillMarket: React.FC<SkillMarketProps> = ({ onClose }) => {
               {installError}
             </div>
           ) : null}
+
+          <section>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 px-1">
+              <div>
+                <h2 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-gray-800 dark:text-foreground">
+                  <Layers3 size={16} className="text-cyan-500" />
+                  {t("bundles.heading")}
+                </h2>
+                <p className="mt-1 text-xs text-gray-500 dark:text-muted-foreground">
+                  {t("bundles.headingDescription")}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingBundle(undefined);
+                  setShowBundleEditor(true);
+                }}
+                disabled={installedSkills.length === 0}
+                className="inline-flex items-center gap-1 rounded-lg bg-cyan-50 px-3 py-1.5 text-xs font-medium text-cyan-700 transition-colors hover:bg-cyan-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/60 disabled:opacity-50 dark:bg-cyan-950/30 dark:text-cyan-300"
+              >
+                <Plus size={14} aria-hidden="true" />
+                {t("bundles.new")}
+              </button>
+            </div>
+            {skillBundles.length > 0 ? (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {skillBundles.map((bundle) => {
+                  const missingSkills = bundle.steps.filter(
+                    (step) => !installedIdSet.has(step.skillId),
+                  );
+                  const isActive = activeSkillBundleIds.includes(bundle.id);
+                  return (
+                    <div
+                      key={bundle.id}
+                      className="flex flex-col rounded-2xl border border-cyan-100 bg-cyan-50/30 p-4 dark:border-cyan-900/40 dark:bg-cyan-950/10"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <h3 className="truncate text-sm font-semibold text-gray-800 dark:text-foreground">
+                            {bundle.title}
+                          </h3>
+                          <p className="mt-1 line-clamp-2 text-xs text-gray-500 dark:text-muted-foreground">
+                            {bundle.description ||
+                              t("bundles.stepCount", {
+                                count: bundle.steps.length,
+                              })}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={isActive}
+                          disabled={missingSkills.length > 0}
+                          onClick={() => toggleSkillBundleActive(bundle.id)}
+                          className={`rounded-full px-2 py-1 text-[10px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/60 disabled:opacity-50 ${isActive ? "bg-cyan-600 text-white" : "bg-gray-100 text-gray-500 dark:bg-muted dark:text-muted-foreground"}`}
+                        >
+                          {isActive
+                            ? t("bundles.active")
+                            : t("bundles.inactive")}
+                        </button>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-1">
+                        {bundle.steps.map((step, index) => (
+                          <span
+                            key={step.id}
+                            className={`rounded px-1.5 py-0.5 text-[10px] ${installedIdSet.has(step.skillId) ? "bg-white text-gray-600 dark:bg-card dark:text-foreground/75" : "bg-red-50 text-red-600 dark:bg-red-950/30 dark:text-red-300"}`}
+                          >
+                            {index + 1}. {step.skillId}
+                          </span>
+                        ))}
+                      </div>
+                      {missingSkills.length > 0 ? (
+                        <p className="mt-2 text-[11px] text-red-600 dark:text-red-300">
+                          {t("bundles.invalidMissing")}
+                        </p>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingBundle(bundle);
+                          setShowBundleEditor(true);
+                        }}
+                        className="mt-4 self-end rounded-lg px-2 py-1 text-xs font-medium text-cyan-700 hover:bg-cyan-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/60 dark:text-cyan-300 dark:hover:bg-cyan-950/30"
+                      >
+                        {t("edit")}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-dashed border-cyan-200 px-4 py-8 text-center text-xs text-gray-500 dark:border-cyan-900/50 dark:text-muted-foreground">
+                {t("bundles.none")}
+              </div>
+            )}
+          </section>
 
           <section>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3 px-1">

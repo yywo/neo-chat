@@ -12,7 +12,10 @@ export type {
   ChatPipelineState,
   ChatPipelineStatus,
   Message,
+  MessageGenerationState,
+  MessageGenerationStatus,
   MessageOutputBlock,
+  MessageReplyReference,
   MessageTreeNode,
   MessageVersion,
   ReasoningMode,
@@ -33,6 +36,8 @@ export type {
   KnowledgeFileIndexStatus,
   KnowledgeFileStorageStatus,
   KnowledgeFileStatus,
+  KnowledgeChunkingConfig,
+  KnowledgeChunkingStrategy,
 } from "./lib/knowledge/types";
 export type {
   Plugin,
@@ -52,6 +57,12 @@ export type {
   SkillCatalogEntry,
   SkillDataLocale,
   SkillSelectionResult,
+  SkillBundle,
+  SkillBundleStep,
+  SkillParameterBinding,
+  SkillParameterDefinition,
+  SkillParameterInput,
+  SkillParameterOption,
   TextSkill,
   TextSkillActivation,
   TextSkillRisk,
@@ -63,8 +74,11 @@ export type {
 } from "./lib/providers/types";
 export type {
   ImageSource,
+  CitationSource,
+  CitationSourceKind,
   SearchProviderID,
   SearchServiceConfig,
+  SearchTimeRange,
   Source,
 } from "./lib/search/types";
 export type {

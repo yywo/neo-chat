@@ -1,3 +1,6 @@
+import type { Attachment } from "@/types";
+import { normalizeGeneratedImageAttachments } from "@/lib/utils/generatedImages";
+
 type PluginImageCandidate = {
   id?: unknown;
   mimeType?: unknown;
@@ -69,6 +72,14 @@ function getPluginResultImageCandidates(
       };
     })
     .filter((item): item is PluginImageCandidate => Boolean(item));
+}
+
+export function extractPluginImageAttachments(
+  resultData: unknown,
+): Attachment[] {
+  return normalizeGeneratedImageAttachments(
+    getPluginResultImageCandidates(resultData),
+  );
 }
 
 export function compactPluginImageResultForHistory(

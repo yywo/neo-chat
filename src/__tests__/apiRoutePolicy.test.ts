@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { getApiRateLimitPolicy } from "../lib/security/apiRoutePolicy";
+import {
+  getApiRateLimitPolicy,
+  isApiProofProtectedRoute,
+} from "../lib/security/apiRoutePolicy";
 
 describe("API route rate-limit policy", () => {
   it("keeps image proxy and proof-session bootstrapping on bounded quotas", () => {
@@ -21,5 +24,15 @@ describe("API route rate-limit policy", () => {
 
     expect(first?.routeFamily).toBe("/api/agents");
     expect(second?.routeFamily).toBe("/api/agents");
+  });
+
+  it("protects local MCP bridge discovery with proof and a narrow quota", () => {
+    const pathname = "/api/plugins/mcp-bridge/discover";
+    expect(isApiProofProtectedRoute(pathname, "POST")).toBe(true);
+    expect(getApiRateLimitPolicy(pathname, "POST")).toEqual({
+      routeFamily: pathname,
+      windowMs: 60_000,
+      maxRequests: 10,
+    });
   });
 });

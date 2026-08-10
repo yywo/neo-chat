@@ -15,5 +15,12 @@
   "capabilityUnsupportedModel": "The selected model cannot use built-in search. Choose an external provider.",
   "capabilityMissingBaseUrl": "{provider} requires a base URL.",
   "capabilityMissingKey": "{provider} requires an API key.",
-  "resultLimit": "Result Limit"
+  "resultLimit": "Result Limit",
+  "timeRange": "Time range",
+  "timeRangeAny": "Any time",
+  "timeRangeDay": "Past 24 hours",
+  "timeRangeWeek": "Past week",
+  "timeRangeMonth": "Past month",
+  "timeRangeYear": "Past year",
+  "timeRangeHint": "Firecrawl only applies a time filter when you select one."
 }

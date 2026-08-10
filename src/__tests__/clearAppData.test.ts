@@ -6,6 +6,7 @@ const {
   dirMock,
   encryptSecretMock,
   localforageClearMock,
+  syncStorageClearMock,
   removeMock,
   tokenSecret,
 } = vi.hoisted(() => {
@@ -41,6 +42,7 @@ const {
     })),
     encryptSecretMock: vi.fn(async () => tokenSecret),
     localforageClearMock: vi.fn(() => Promise.resolve()),
+    syncStorageClearMock: vi.fn(() => Promise.resolve()),
     removeMock,
     tokenSecret,
   };
@@ -49,6 +51,9 @@ const {
 vi.mock("localforage", () => ({
   default: {
     clear: localforageClearMock,
+    createInstance: vi.fn(() => ({
+      clear: syncStorageClearMock,
+    })),
   },
 }));
 
@@ -174,6 +179,8 @@ describe("clear app data", () => {
 
   it("cleans persisted RAG vectors and OPFS directories before clearing storage", async () => {
     await clearBrowserAppData(ragConfig);
+
+    expect(syncStorageClearMock).toHaveBeenCalledOnce();
 
     expect(fetch).toHaveBeenCalledWith(
       "/api/rag/delete",

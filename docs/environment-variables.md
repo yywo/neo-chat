@@ -28,6 +28,14 @@ Use Node 22 and Corepack-managed `pnpm@10.30.3` for local builds, CI, Docker,
 and Workers Builds. Worker PRs should also pass `pnpm worker:size` and
 `pnpm worker:dry-run` after `pnpm build:worker`.
 
+`NEXT_DEPLOYMENT_ID` is an optional non-secret build-time release identifier.
+Use a commit SHA or release ID, and use the same value for every replica in one
+rollout. Neo Chat generates a unique fallback when it is omitted. The value is
+baked into Next.js version-skew protection and the PWA cache namespace, so
+setting it only as a runtime variable is too late. For Workers Builds, configure
+it under **Settings -> Builds -> Variables and Secrets**. Docker Compose passes
+the value as a build argument.
+
 `--keep-vars` preserves dashboard-managed runtime variables and secrets across
 deployments. Without it, deployments can replace dashboard variables with only
 the values present in `wrangler.jsonc`.
@@ -63,6 +71,7 @@ pnpm byok:generate
 | Variable                          | Purpose                                                                                                                                                                                     |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DEPLOYMENT_MODE`                 | Selects local or hosted deployment safeguards and shared-store expectations. It does not block user-configured HTTP or private-network targets.                                             |
+| `NEXT_DEPLOYMENT_ID`              | Optional build-time release ID shared by every replica in one rollout; drives Next.js version-skew protection and PWA cache rotation.                                                       |
 | `ALLOW_INSECURE_LOCAL_PRODUCTION` | Explicitly allows production `local` mode without `ACCESS_PASSWORD`. Use only for private deployments that are not exposed to the internet.                                                 |
 | `ALLOW_LOCAL_NETWORK_PROXY`       | Allows HTTP on deployment-gated media/image proxy surfaces. Private addresses themselves are no longer blocked; provider, search, RAG, plugin, and MCP policies do not depend on this flag. |
 | `TRUST_PROXY_HEADERS`             | Trust forwarded proxy headers only when the hosting platform strips spoofed values.                                                                                                         |

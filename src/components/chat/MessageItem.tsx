@@ -11,6 +11,7 @@ import { createPortal } from "react-dom";
 import { useLocale, useTranslations } from "next-intl";
 import { toPng } from "html-to-image";
 import type { Attachment, Message, ToolConfirmationDecision } from "@/types";
+import type { ModelInfo } from "@/services/api/chatService";
 import MarkdownRenderer from "../content/MarkdownRenderer";
 import Tooltip from "../ui/Tooltip";
 import Artifact from "../content/Artifact";
@@ -23,6 +24,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -46,6 +48,7 @@ import {
   Minimize2,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   X,
   Info,
   Loader2,
@@ -54,6 +57,7 @@ import {
   Sparkles,
   Signature,
   FileImage,
+  Quote,
 } from "lucide-react";
 import { BubblesLoading } from "../ui/Icons";
 import { useChatStore } from "@/store/core/chatStore";
@@ -84,21 +88,31 @@ import {
   decodeAttachmentText,
   isTextDocumentMimeType,
 } from "@/lib/utils/documentAttachments";
+import { hasUnsafeContinuationToolState } from "@/lib/chat/streamResilience";
+import type { MessageBranchOption } from "@/lib/chat/messageTree";
 
 interface MessageItemProps {
   message: Message;
   actionsDisabled?: boolean;
+  mutationsDisabled?: boolean;
+  toolActionsDisabled?: boolean;
   branchInfo?: {
     index: number;
     count: number;
   };
+  branchOptions?: MessageBranchOption[];
   onEdit: (id: string, newContent: string) => void;
   onDelete: (id: string) => void;
-  onRegenerate?: () => void;
+  availableModels?: ModelInfo[];
+  onRegenerate?: (model?: string) => void;
+  onContinue?: () => void;
+  onReply?: () => void;
+  onNavigateToMessage?: (messageId: string) => void;
   onRetract?: () => void;
   canEditUserMessage?: boolean;
   onSubmitUserEdit?: (id: string, newContent: string) => void | Promise<void>;
   onVersionChange?: (id: string, direction: "prev" | "next") => void;
+  onVersionSelect?: (targetId: string) => void;
   isLast: boolean;
   isTyping?: boolean;
   onToolConfirmationDecision?: (
@@ -126,6 +140,7 @@ interface PdfPrintJob {
   title: string;
   message: Message;
   searchSources: NonNullable<Message["searchSources"]>;
+  ragSources: NonNullable<Message["ragSources"]>;
 }
 
 interface ImageExportJob {
@@ -133,6 +148,7 @@ interface ImageExportJob {
   title: string;
   message: Message;
   searchSources: NonNullable<Message["searchSources"]>;
+  ragSources: NonNullable<Message["ragSources"]>;
   width: number;
 }
 
@@ -289,18 +305,28 @@ const proxyMessageExportImages = async (
 const MessageItem: React.FC<MessageItemProps> = ({
   message,
   actionsDisabled = false,
+  mutationsDisabled = false,
+  toolActionsDisabled = false,
   branchInfo,
+  branchOptions = [],
   onEdit,
   onDelete,
+  availableModels = [],
   onRegenerate,
+  onContinue,
+  onReply,
+  onNavigateToMessage,
   onRetract,
   canEditUserMessage = false,
   onSubmitUserEdit,
   onVersionChange,
+  onVersionSelect,
   isTyping = false,
   onToolConfirmationDecision,
   onRevokeToolSessionApproval,
 }) => {
+  const mutationActionsDisabled = actionsDisabled || mutationsDisabled;
+  const confirmationActionsDisabled = actionsDisabled || toolActionsDisabled;
   const t = useTranslations("Message");
   const locale = useLocale();
   const durationFormatter = useMemo(
@@ -447,7 +473,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
   };
 
   const handleDeleteClick = () => {
-    if (actionsDisabled) return;
+    if (mutationActionsDisabled) return;
     if (isDeleteConfirming) {
       resetDeleteConfirmation();
       setShowMoreMenu(false);
@@ -723,7 +749,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
   };
 
   const handleEditClick = () => {
-    if (actionsDisabled) return;
+    if (mutationActionsDisabled) return;
     setIsEditing(true);
   };
 
@@ -787,6 +813,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
       title: getMessageDownloadName("pdf"),
       message,
       searchSources: message.searchSources || [],
+      ragSources: message.ragSources || [],
     });
     setShowMoreMenu(false);
   };
@@ -799,12 +826,14 @@ const MessageItem: React.FC<MessageItemProps> = ({
       title: getMessageDownloadName("png"),
       message,
       searchSources: message.searchSources || [],
+      ragSources: message.ragSources || [],
       width: getMessageImageExportWidth(visibleMessageContentRef.current),
     });
     setShowMoreMenu(false);
   };
 
   const handleAddToKnowledge = () => {
+    if (mutationActionsDisabled) return;
     setShowAddToKnowledgeModal(true);
     setShowMoreMenu(false);
   };
@@ -964,13 +993,19 @@ const MessageItem: React.FC<MessageItemProps> = ({
   const isErrorMessage =
     message.role === "model" && message.content.startsWith("Error:");
   const generationError = message.generationError;
+  const isInterrupted =
+    message.generation?.status === "interrupted" &&
+    Boolean(
+      message.content || message.reasoning || message.outputBlocks?.length,
+    );
+  const continuationBlocked = hasUnsafeContinuationToolState(message.toolCalls);
 
   // Branch navigation checks
   const hasMultipleBranches = !!branchInfo && branchInfo.count > 1;
   const currentBranchIndex = branchInfo?.index ?? 0;
   const branchCount = branchInfo?.count ?? 1;
   const canEditCurrentUserMessage =
-    !actionsDisabled &&
+    !mutationActionsDisabled &&
     message.role === "user" &&
     canEditUserMessage &&
     !!onSubmitUserEdit;
@@ -1035,7 +1070,10 @@ const MessageItem: React.FC<MessageItemProps> = ({
   );
 
   // RAG Data
-  const ragSources = message.ragSources || [];
+  const ragSources = useMemo(
+    () => message.ragSources || [],
+    [message.ragSources],
+  );
   const ragError = message.ragError?.message;
 
   // Tool Data
@@ -1203,6 +1241,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
               message={pdfPrintJob.message}
               displayedContent={pdfPrintJob.message.content}
               searchSources={pdfPrintJob.searchSources}
+              ragSources={pdfPrintJob.ragSources}
               forcedTheme="light"
               forceExpandCodeBlocks
             />
@@ -1226,6 +1265,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
                   message={imageExportJob.message}
                   displayedContent={imageExportJob.message.content}
                   searchSources={imageExportJob.searchSources}
+                  ragSources={imageExportJob.ragSources}
                   forceExpandCodeBlocks
                   hideReasoning
                   hideToolCalls
@@ -1340,9 +1380,18 @@ const MessageItem: React.FC<MessageItemProps> = ({
                     message={message}
                     displayedContent={message.content}
                     searchSources={readingMode === "message" ? sources : []}
+                    ragSources={readingMode === "message" ? ragSources : []}
                     onFileClick={handleFileClick}
-                    onToolConfirmationDecision={onToolConfirmationDecision}
-                    onRevokeToolSessionApproval={onRevokeToolSessionApproval}
+                    onToolConfirmationDecision={
+                      confirmationActionsDisabled
+                        ? undefined
+                        : onToolConfirmationDecision
+                    }
+                    onRevokeToolSessionApproval={
+                      confirmationActionsDisabled
+                        ? undefined
+                        : onRevokeToolSessionApproval
+                    }
                   />
                 )}
               </div>
@@ -1410,6 +1459,20 @@ const MessageItem: React.FC<MessageItemProps> = ({
           ref={visibleMessageContentRef}
           className="flex-1 min-w-0 pl-1 md:pl-0"
         >
+          {message.replyTo ? (
+            <button
+              type="button"
+              onClick={() => onNavigateToMessage?.(message.replyTo!.messageId)}
+              className={`mb-2 flex max-w-full items-start gap-2 rounded-md border border-border/70 bg-muted/30 px-2.5 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground ${actionButtonFocusClass}`}
+              aria-label={t("openReplySource")}
+            >
+              <Quote size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
+              <span className="line-clamp-2 wrap-break-word">
+                {message.replyTo.excerpt || t("replySourceUnavailable")}
+              </span>
+            </button>
+          ) : null}
+
           {/* Attachments */}
           {message.attachments && message.attachments.length > 0 && (
             <div className="flex flex-wrap gap-3 mb-2">
@@ -1498,6 +1561,35 @@ const MessageItem: React.FC<MessageItemProps> = ({
                 </div>
               ) : null}
 
+              {isInterrupted ? (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100"
+                >
+                  <div className="min-w-0">
+                    <div className="font-semibold">
+                      {t("generationInterrupted")}
+                    </div>
+                    <div className="mt-0.5 text-xs opacity-80">
+                      {continuationBlocked
+                        ? t("continuationBlockedByTools")
+                        : t("partialOutputPreserved")}
+                    </div>
+                  </div>
+                  {!continuationBlocked && onContinue ? (
+                    <button
+                      type="button"
+                      onClick={onContinue}
+                      disabled={mutationActionsDisabled}
+                      className={`rounded-md border border-amber-300 bg-white/70 px-2.5 py-1 text-xs font-medium transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800 dark:bg-amber-950 dark:hover:bg-amber-900 ${actionButtonFocusClass}`}
+                    >
+                      {t("continueGeneration")}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+
               {/* Loading State */}
               {isLoading ? (
                 <div
@@ -1518,10 +1610,19 @@ const MessageItem: React.FC<MessageItemProps> = ({
                   isThinking={isThinking}
                   isErrorMessage={isErrorMessage}
                   searchSources={sources}
+                  ragSources={ragSources}
                   onFileClick={handleFileClick}
                   onImageCached={persistCachedOutputImage}
-                  onToolConfirmationDecision={onToolConfirmationDecision}
-                  onRevokeToolSessionApproval={onRevokeToolSessionApproval}
+                  onToolConfirmationDecision={
+                    confirmationActionsDisabled
+                      ? undefined
+                      : onToolConfirmationDecision
+                  }
+                  onRevokeToolSessionApproval={
+                    confirmationActionsDisabled
+                      ? undefined
+                      : onRevokeToolSessionApproval
+                  }
                 />
               )}
             </>
@@ -1615,22 +1716,93 @@ const MessageItem: React.FC<MessageItemProps> = ({
                         icon={<ChevronLeft size={13} />}
                         tooltip={t("previousVersion")}
                         onClick={() => onVersionChange(message.id, "prev")}
-                        disabled={actionsDisabled || currentBranchIndex === 0}
+                        disabled={
+                          mutationActionsDisabled || currentBranchIndex === 0
+                        }
                         className={
                           currentBranchIndex === 0
                             ? "opacity-30 cursor-not-allowed"
                             : ""
                         }
                       />
-                      <span className="hidden md:inline text-[9px] font-mono px-0.5 select-none text-gray-400">
-                        {currentBranchIndex + 1}/{branchCount}
-                      </span>
+                      {onVersionSelect ? (
+                        <DropdownMenu>
+                          <Tooltip
+                            content={t("openBranchNavigator")}
+                            position="top"
+                          >
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                type="button"
+                                aria-label={t("openBranchNavigator")}
+                                className="inline-flex rounded px-1 py-0.5 font-mono text-[9px] text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50 dark:hover:bg-accent dark:hover:text-foreground"
+                              >
+                                {currentBranchIndex + 1}/{branchCount}
+                              </button>
+                            </DropdownMenuTrigger>
+                          </Tooltip>
+                          <DropdownMenuContent
+                            side="top"
+                            align="center"
+                            className="max-h-72 w-80 overflow-y-auto"
+                          >
+                            <DropdownMenuLabel>
+                              {t("branchNavigatorTitle")}
+                            </DropdownMenuLabel>
+                            {branchOptions.map((option, optionIndex) => (
+                              <DropdownMenuItem
+                                key={option.id}
+                                onSelect={() => onVersionSelect(option.id)}
+                                className="items-start gap-2 py-2"
+                              >
+                                <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center">
+                                  {option.active ? (
+                                    <Check size={13} aria-hidden="true" />
+                                  ) : (
+                                    <span className="text-[10px] text-muted-foreground">
+                                      {optionIndex + 1}
+                                    </span>
+                                  )}
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                  <span className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+                                    <span>
+                                      {option.message.role === "user"
+                                        ? t("branchRoleUser")
+                                        : option.message.model ||
+                                          t("branchRoleAssistant")}
+                                    </span>
+                                    <span>
+                                      {new Intl.DateTimeFormat(locale, {
+                                        month: "short",
+                                        day: "numeric",
+                                        hour: "2-digit",
+                                        minute: "2-digit",
+                                      }).format(
+                                        new Date(option.message.timestamp),
+                                      )}
+                                    </span>
+                                  </span>
+                                  <span className="mt-0.5 block truncate text-xs text-foreground">
+                                    {option.message.content.trim() ||
+                                      t("branchEmptyContent")}
+                                  </span>
+                                </span>
+                              </DropdownMenuItem>
+                            ))}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      ) : (
+                        <span className="px-0.5 font-mono text-[9px] text-gray-400">
+                          {currentBranchIndex + 1}/{branchCount}
+                        </span>
+                      )}
                       <ActionButton
                         icon={<ChevronRight size={13} />}
                         tooltip={t("nextVersion")}
                         onClick={() => onVersionChange(message.id, "next")}
                         disabled={
-                          actionsDisabled ||
+                          mutationActionsDisabled ||
                           currentBranchIndex === branchCount - 1
                         }
                         className={
@@ -1651,7 +1823,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
                         icon={<Undo2 size={13} />}
                         tooltip={t("retract")}
                         onClick={onRetract}
-                        disabled={actionsDisabled}
+                        disabled={mutationActionsDisabled}
                       />
                     )}
                     {canEditCurrentUserMessage && (
@@ -1692,19 +1864,68 @@ const MessageItem: React.FC<MessageItemProps> = ({
                   </>
                 )}
 
+                {onReply ? (
+                  <ActionButton
+                    icon={<Quote size={13} />}
+                    tooltip={t("reply")}
+                    onClick={onReply}
+                    disabled={mutationActionsDisabled}
+                  />
+                ) : null}
+
                 {message.role === "model" && (
                   <>
-                    <ActionButton
-                      icon={<RefreshCw size={13} />}
-                      tooltip={t("regenerate")}
-                      onClick={onRegenerate}
-                      disabled={actionsDisabled}
-                    />
+                    <div className="flex items-center">
+                      <ActionButton
+                        icon={<RefreshCw size={13} />}
+                        tooltip={t("regenerate")}
+                        onClick={() => onRegenerate?.()}
+                        disabled={mutationActionsDisabled || !onRegenerate}
+                      />
+                      {onRegenerate && availableModels.length > 0 ? (
+                        <DropdownMenu>
+                          <Tooltip
+                            content={t("regenerateWithModel")}
+                            position="top"
+                          >
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                type="button"
+                                aria-label={t("regenerateWithModel")}
+                                disabled={mutationActionsDisabled}
+                                className={`-ml-1 rounded-lg p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-muted dark:hover:text-foreground ${actionButtonFocusClass}`}
+                              >
+                                <ChevronDown size={11} aria-hidden="true" />
+                              </button>
+                            </DropdownMenuTrigger>
+                          </Tooltip>
+                          <DropdownMenuContent
+                            side="top"
+                            align="end"
+                            className="max-h-64 w-60 overflow-y-auto custom-scrollbar"
+                          >
+                            <DropdownMenuLabel>
+                              {t("regenerateWithModel")}
+                            </DropdownMenuLabel>
+                            {availableModels.map((model) => (
+                              <DropdownMenuItem
+                                key={model.name}
+                                onSelect={() => onRegenerate(model.name)}
+                              >
+                                <span className="truncate">
+                                  {model.displayName}
+                                </span>
+                              </DropdownMenuItem>
+                            ))}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      ) : null}
+                    </div>
                     <ActionButton
                       icon={<Edit2 size={13} />}
                       tooltip={t("edit")}
                       onClick={handleEditClick}
-                      disabled={actionsDisabled}
+                      disabled={mutationActionsDisabled}
                       containerClass="hidden! md:flex!"
                     />
                     <ActionButton
@@ -1837,7 +2058,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
                     isDeleteConfirming ? t("confirmDelete") : t("delete")
                   }
                   onClick={handleDeleteClick}
-                  disabled={actionsDisabled}
+                  disabled={mutationActionsDisabled}
                   containerClass={
                     message.role === "user" ? "flex" : "hidden! md:flex!"
                   }
@@ -1894,7 +2115,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
                         className="w-48"
                       >
                         <DropdownMenuItem
-                          disabled={actionsDisabled}
+                          disabled={mutationActionsDisabled}
                           onSelect={() => {
                             handleEditClick();
                             setShowMoreMenu(false);
@@ -1908,7 +2129,10 @@ const MessageItem: React.FC<MessageItemProps> = ({
                           <span>{t("edit")}</span>
                         </DropdownMenuItem>
 
-                        <DropdownMenuItem onSelect={handleAddToKnowledge}>
+                        <DropdownMenuItem
+                          disabled={mutationActionsDisabled}
+                          onSelect={handleAddToKnowledge}
+                        >
                           <Library
                             size={14}
                             className="text-gray-500 dark:text-muted-foreground"
@@ -1978,7 +2202,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
                           variant="destructive"
-                          disabled={actionsDisabled}
+                          disabled={mutationActionsDisabled}
                           onSelect={(event) => {
                             event.preventDefault();
                             handleDeleteClick();

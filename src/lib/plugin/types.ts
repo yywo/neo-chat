@@ -2,7 +2,7 @@ import type { LocalEncryptedSecretEnvelope } from "../security/localSecrets";
 
 export type PluginFunctionRisk = "read" | "write" | "destructive" | "external";
 export type PluginSource = "builtin" | "openapi" | "mcp";
-export type McpTransport = "streamable-http";
+export type McpTransport = "streamable-http" | "sse";
 
 export interface PluginFunction {
   name: string;
@@ -16,6 +16,7 @@ export interface PluginFunction {
 
 export interface PluginMcpMetadata {
   transport: McpTransport;
+  source?: "registry" | "custom" | "bridge";
   serverUrl: string;
   serverName: string;
   serverVersion?: string;

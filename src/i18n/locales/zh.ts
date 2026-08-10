@@ -27,6 +27,7 @@ import Config from "./zh/Config.json";
 import Skill from "./zh/Skill.json";
 import About from "./zh/About.json";
 import GlobalSearch from "./zh/GlobalSearch.json";
+import Sync from "./zh/Sync.json";
 
 const messages = {
   Common,
@@ -58,6 +59,7 @@ const messages = {
   Skill,
   About,
   GlobalSearch,
+  Sync,
 };
 
 export default messages;

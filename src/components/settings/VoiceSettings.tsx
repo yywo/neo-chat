@@ -24,7 +24,10 @@ import {
   encryptLocalSecret,
   LOCAL_SECRET_CONTEXTS,
 } from "@/lib/security/localSecrets";
-import { supportsModality } from "@/lib/utils/model";
+import {
+  resolveProviderModelMetadata,
+  supportsModality,
+} from "@/lib/utils/model";
 
 const MIMO_STT_MODEL = "mimo-v2.5-asr";
 const MIMO_API_KEY_URL = "https://platform.xiaomimimo.com/";
@@ -49,7 +52,12 @@ const VoiceSettings = () => {
       .filter((p) => p.enabled)
       .forEach((p) => {
         p.models.forEach((mId) => {
-          const meta = customModelMetadata[mId] || modelMetadata[mId];
+          const meta = resolveProviderModelMetadata({
+            providerId: p.id,
+            modelName: mId,
+            modelMetadata,
+            customModelMetadata,
+          });
           const name = meta?.name || mId;
           const fullId = `${p.id}:${mId}`;
           const displayName = `${name} (${p.name})`;

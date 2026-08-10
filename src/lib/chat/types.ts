@@ -1,6 +1,7 @@
 import type { PluginFunctionRisk } from "../plugin/types";
-import type { ImageSource, Source } from "../search/types";
+import type { CitationSource, ImageSource, Source } from "../search/types";
 import type { AppliedSkillInvocation } from "../skills/types";
+import type { TaskPlanStep } from "../agent/taskPlan";
 
 export interface Attachment {
   id: string;
@@ -31,6 +32,24 @@ export interface MessageVersion {
   };
 }
 
+export interface MessageReplyReference {
+  messageId: string;
+  role: "user" | "model";
+  excerpt: string;
+}
+
+export type MessageGenerationStatus = "streaming" | "interrupted" | "completed";
+
+export interface MessageGenerationState {
+  status: MessageGenerationStatus;
+  requestId: string;
+  ownerDeviceId: string;
+  model: string;
+  attempt: number;
+  checkpointAt: number;
+  continuedFrom?: string;
+}
+
 export interface ToolCall {
   id: string;
   name: string;
@@ -47,6 +66,7 @@ export interface ToolCall {
     | "skipped"
     | "denied";
   result?: any;
+  resultImages?: Attachment[];
   isError?: boolean;
   risk?: PluginFunctionRisk;
   confirmation?: {
@@ -132,6 +152,12 @@ export type MessageOutputBlock =
     }
   | {
       id: string;
+      type: "task_plan";
+      steps: TaskPlanStep[];
+      note?: string;
+    }
+  | {
+      id: string;
       type: "tool_group";
       toolCalls: ToolCall[];
     };
@@ -143,6 +169,8 @@ export interface Message {
   reasoning?: string;
   timestamp: number;
   attachments?: Attachment[];
+  replyTo?: MessageReplyReference;
+  generation?: MessageGenerationState;
   toolCalls?: ToolCall[];
   skillInvocations?: AppliedSkillInvocation[];
   memoryContext?: {
@@ -157,6 +185,7 @@ export interface Message {
     code?: string;
   };
   searchSources?: Source[];
+  citations?: CitationSource[];
   searchImages?: ImageSource[];
   isSearching?: boolean;
   outputBlocks?: MessageOutputBlock[];
@@ -294,6 +323,7 @@ export type ChatGenerationEvent =
 export interface SessionConfig {
   useSearch?: boolean;
   useReasoning?: boolean;
+  useAgentMode?: boolean;
   reasoningMode?: ReasoningMode;
   activePlugins?: string[];
   activeSkills?: string[];
@@ -348,6 +378,7 @@ export interface Assistant {
 export interface ChatConfig {
   useSearch: boolean;
   useReasoning: boolean;
+  useAgentMode?: boolean;
   reasoningMode: ReasoningMode;
   useRAG?: boolean;
   temperature: number;

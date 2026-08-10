@@ -31,6 +31,9 @@ describe("stable scrollbar gutter composition", () => {
 
   it("uses reduced padding only on the primary scrolling content", () => {
     const chatShell = readProjectFile("src/components/app/ChatAppShell.tsx");
+    const chatTimeline = readProjectFile(
+      "src/components/chat/VirtualizedMessageTimeline.tsx",
+    );
     const globalSearch = readProjectFile(
       "src/components/search/GlobalSearchCenter.tsx",
     );
@@ -48,10 +51,9 @@ describe("stable scrollbar gutter composition", () => {
       "src/components/settings/SettingsPage.tsx",
     );
 
-    expect(chatShell).toContain(
-      "flex-1 overflow-y-auto px-3 pb-[calc(8rem+env(safe-area-inset-bottom))]",
-    );
-    expect(chatShell).toContain("md:px-6 md:pt-6");
+    expect(chatShell).toContain("relative flex-1 overflow-y-auto px-3 md:px-6");
+    expect(chatShell).not.toContain("motion-safe:scroll-smooth");
+    expect(chatTimeline).toContain("paddingEnd: 144");
     expect(chatShell).toContain(
       "absolute left-0 right-0 z-20 px-4 pointer-events-none md:px-8",
     );

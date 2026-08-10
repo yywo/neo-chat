@@ -231,4 +231,44 @@ describe("MessageItem composition", () => {
     expect(zh.Message.downloadInProgress).toBe("下载中…");
     expect(zh.Message.downloadFormat).toBe("下载格式");
   });
+
+  it("caches stable message output without changing code collapse behavior", () => {
+    const markdownRenderer = readFileSync(
+      resolve(
+        process.cwd(),
+        "src/components/content/MarkdownRendererClient.tsx",
+      ),
+      "utf8",
+    );
+    const markdownBoundary = readFileSync(
+      resolve(process.cwd(), "src/components/content/MarkdownRenderer.tsx"),
+      "utf8",
+    );
+    const messageOutputRenderer = readFileSync(
+      resolve(
+        process.cwd(),
+        "src/components/content/MessageOutputRenderer.tsx",
+      ),
+      "utf8",
+    );
+
+    expect(markdownRenderer).toContain("const MarkdownCode =");
+    expect(markdownRenderer).toContain("code: MarkdownCode");
+    expect(markdownRenderer).toContain(
+      "<CodeBlockRenderOptionsContext.Provider",
+    );
+    expect(markdownRenderer).toContain(
+      "if (isStreaming) return; // Do not calculate during streaming",
+    );
+    expect(markdownRenderer).toContain("const vh50 = window.innerHeight * 0.5");
+    expect(markdownRenderer).toContain("onClick={toggleCollapse}");
+    expect(markdownRenderer).toContain("aria-expanded={!isCollapsed}");
+    expect(markdownRenderer).toContain("isMountedRef.current = true");
+    expect(markdownBoundary).toContain(
+      "const MarkdownRenderer = memo(function MarkdownRenderer",
+    );
+    expect(messageOutputRenderer).toContain(
+      "export default React.memo(MessageOutputRenderer)",
+    );
+  });
 });

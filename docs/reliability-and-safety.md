@@ -34,6 +34,26 @@ active skills are injected directly. Skills must stay text-only and are
 normalized to reject script, external-tool, network, or file-system
 requirements.
 
+## Agent Mode Built-ins
+
+Agent mode is opt-in per chat and is enabled only for models whose metadata
+declares tool-call support. Its orchestration runs in the browser and registers
+five application-owned built-ins: `web_search`, `search_knowledge`,
+`load_skill`, `run_javascript`, and `update_task_plan`. They are classified as
+read-only and are auto-approved, so they do not enter the plugin confirmation
+flow described below.
+
+`load_skill` returns text-only instructions; it does not make a Skill
+executable. `run_javascript` accepts synchronous computation only and runs in a
+bounded browser sandbox without DOM or network access. Output and execution
+limits remain enforced before the result returns to the model.
+
+Agent `web_search` is registered only when effective search configuration uses
+an external provider. Native Google Search and OpenAI Web Search are model
+features and are not combined with Agent function calling. The composer keeps
+the Search control operable but exposes this incompatibility in its tooltip and
+accessible label instead of silently implying that `web_search` is available.
+
 ## Plugin Tool Safety
 
 Plugin functions carry risk metadata:
@@ -61,9 +81,12 @@ update cannot reuse a stale execution contract. Plugin execution still goes
 through the server route, request validation, BYOK secret handling, outbound URL
 policy, response limits, and the tool-call round ceiling.
 
-MCP-backed functions add a remote side-effect boundary: the MCP server owns the
-tool implementation and may perform external actions. The supported MCP
-transport is remote `streamable-http` over HTTP or HTTPS. User-configured MCP,
+MCP-backed functions add a side-effect boundary: the MCP server owns the tool
+implementation and may perform external actions. The application transport is
+`streamable-http` or legacy `sse` over HTTP or HTTPS; local Docker deployments
+can translate an explicit stdio allowlist through the separate bridge.
+Fallback from Streamable HTTP to SSE is limited to connection setup after a 404
+or 405, so a tool call is never retried across transports. User-configured MCP,
 provider, search, RAG, and plugin targets may resolve to localhost or private
 networks in either deployment mode; fixed registries and built-in services
 remain HTTPS-only. HTTP may expose credentials or permit response tampering,

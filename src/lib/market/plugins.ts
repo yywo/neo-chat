@@ -120,9 +120,11 @@ function normalizeMcpMetadata(value: unknown): Plugin["mcp"] | undefined {
             .map(([key, value]) => [key, value as string]),
         )
       : {};
+  const transport =
+    trimString(raw.transport, 40) === "sse" ? "sse" : "streamable-http";
 
   return {
-    transport: "streamable-http",
+    transport,
     serverUrl,
     serverName,
     serverVersion:

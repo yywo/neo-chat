@@ -1,4 +1,5 @@
 import type { ImageSource, Message, Source } from "@/types";
+import { createCitationSources } from "@/lib/utils/citations";
 
 export function mergeSources(
   existing: Source[] = [],
@@ -38,14 +39,23 @@ export function buildSearchUpdate(
   message: Message | undefined,
   isSearching: boolean,
   results?: { sources: Source[]; images: ImageSource[] },
+  options: { replaceResults?: boolean } = {},
 ): Partial<Message> {
   const updates: Partial<Message> = { isSearching };
   if (results) {
-    updates.searchSources = mergeSources(
-      message?.searchSources,
+    const searchSources = mergeSources(
+      options.replaceResults ? [] : message?.searchSources,
       results.sources,
     );
-    updates.searchImages = mergeImages(message?.searchImages, results.images);
+    updates.searchSources = searchSources;
+    updates.citations = createCitationSources({
+      web: searchSources,
+      knowledge: message?.ragSources,
+    });
+    updates.searchImages = mergeImages(
+      options.replaceResults ? [] : message?.searchImages,
+      results.images,
+    );
   }
   return updates;
 }

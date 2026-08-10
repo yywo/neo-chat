@@ -295,16 +295,33 @@ export function getDefaultProviderApiKey(): string {
   return env("DEFAULT_PROVIDER_API_KEY");
 }
 
+function isDefaultProviderConfigured(): boolean {
+  return [
+    "DEFAULT_PROVIDER_TYPE",
+    "DEFAULT_PROVIDER_NAME",
+    "DEFAULT_PROVIDER_BASE_URL",
+    "DEFAULT_PROVIDER_API_KEY",
+    "DEFAULT_PROVIDER_MODELS",
+    "DEFAULT_MODEL_TITLE_GENERATION",
+    "DEFAULT_MODEL_RELATED_QUESTIONS",
+    "DEFAULT_MODEL_CONTEXT_COMPRESSION",
+    "DEFAULT_MODEL_PROMPT_OPTIMIZATION",
+    "DEFAULT_MODEL_RAG_QUERY",
+    "DEFAULT_MODEL_MEMORY",
+  ].some((name) => Boolean(env(name)));
+}
+
 export function getDefaultProviderRuntimeConfig() {
+  if (!isDefaultProviderConfigured()) return null;
+
   const type = getDefaultProviderType();
   const apiKey = getDefaultProviderApiKey();
-  if (!apiKey) return null;
 
   return {
     type,
     name: env("DEFAULT_PROVIDER_NAME") || DEFAULT_PROVIDER_NAME,
     baseUrl: env("DEFAULT_PROVIDER_BASE_URL") || undefined,
-    apiKey,
+    ...(apiKey ? { apiKey } : {}),
   };
 }
 

@@ -10,6 +10,12 @@ import type {
   TextSkill,
   TextSkillActivation,
   TextSkillRisk,
+  SkillBundle,
+  SkillBundleStep,
+  SkillParameterBinding,
+  SkillParameterDefinition,
+  SkillParameterInput,
+  SkillParameterOption,
 } from "./types";
 
 export type {
@@ -26,6 +32,12 @@ export type {
   TextSkill,
   TextSkillActivation,
   TextSkillRisk,
+  SkillBundle,
+  SkillBundleStep,
+  SkillParameterBinding,
+  SkillParameterDefinition,
+  SkillParameterInput,
+  SkillParameterOption,
 } from "./types";
 
 const SKILL_ID_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
@@ -36,6 +48,8 @@ const DEFAULT_DESCRIPTION = "Pure text skills for chat usage.";
 const DEFAULT_MAX_SKILLS = 4;
 const DEFAULT_METADATA_CONTEXT_CHARS = 12_000;
 const TOKEN_RE = /[\p{L}\p{N}]+/gu;
+const SKILL_PARAMETER_KEY_RE = /^[a-z][a-z0-9_]{0,39}$/;
+const SKILL_SLOT_RE = /\{\{\s*([a-z][a-z0-9_]*)\s*\}\}/g;
 export const SKILL_SELECTION_TOOL_NAME = "select_text_skills";
 
 export interface SkillSelectionToolDefinition {
@@ -123,6 +137,67 @@ function normalizeActivation(value: unknown): TextSkillActivation {
   };
 }
 
+export function normalizeSkillParameters(
+  value: unknown,
+  maxCount = 20,
+): SkillParameterDefinition[] {
+  if (!Array.isArray(value)) return [];
+  const parameters: SkillParameterDefinition[] = [];
+  const seen = new Set<string>();
+
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const raw = item as Record<string, unknown>;
+    const key = trimString(raw.key, 40).toLowerCase();
+    if (!SKILL_PARAMETER_KEY_RE.test(key) || seen.has(key)) continue;
+    const input = ["text", "textarea", "select"].includes(String(raw.input))
+      ? (raw.input as SkillParameterInput)
+      : "text";
+    const options: SkillParameterOption[] = [];
+    const optionValues = new Set<string>();
+    if (input === "select" && Array.isArray(raw.options)) {
+      for (const option of raw.options.slice(0, 30)) {
+        const optionRaw =
+          option && typeof option === "object"
+            ? (option as Record<string, unknown>)
+            : { value: option, label: option };
+        const optionValue = trimString(optionRaw.value, 200);
+        if (!optionValue || optionValues.has(optionValue)) continue;
+        optionValues.add(optionValue);
+        options.push({
+          value: optionValue,
+          label: trimString(optionRaw.label, 120) || optionValue,
+        });
+      }
+    }
+    if (input === "select" && options.length === 0) continue;
+    const maxLengthValue = Number(raw.maxLength);
+    const maxLength = Number.isFinite(maxLengthValue)
+      ? Math.min(20_000, Math.max(1, Math.floor(maxLengthValue)))
+      : input === "textarea"
+        ? 4_000
+        : 500;
+    let defaultValue = trimString(raw.defaultValue, maxLength);
+    if (input === "select" && defaultValue && !optionValues.has(defaultValue)) {
+      defaultValue = "";
+    }
+    parameters.push({
+      key,
+      label: trimString(raw.label, 120) || titleCaseIdentifier(key),
+      description: trimString(raw.description, 500) || undefined,
+      input,
+      required: raw.required === true || undefined,
+      defaultValue: defaultValue || undefined,
+      options: input === "select" ? options : undefined,
+      maxLength,
+    });
+    seen.add(key);
+    if (parameters.length >= maxCount) break;
+  }
+
+  return parameters;
+}
+
 export function resolveSkillDataLocale(locale?: string): SkillDataLocale {
   const normalized = locale?.toLowerCase();
   if (normalized?.startsWith("zh")) return "zh-CN";
@@ -175,12 +250,92 @@ export function normalizeSkillCatalogEntry(
       "markdown",
     risk,
     activation: normalizeActivation(raw.activation),
+    parameters: normalizeSkillParameters(raw.parameters),
     file,
     builtIn: raw.builtIn === true || raw.built_in === true || undefined,
     isCustom: raw.isCustom === true || undefined,
     createdAt: trimString(raw.createdAt, 80) || undefined,
     updatedAt: trimString(raw.updatedAt, 80) || undefined,
   };
+}
+
+function normalizeSkillParameterBinding(
+  value: unknown,
+): SkillParameterBinding | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  if (raw.type === "literal") {
+    return { type: "literal", value: trimString(raw.value, 20_000) };
+  }
+  if (raw.type === "bundle") {
+    const parameterKey = trimString(raw.parameterKey, 40).toLowerCase();
+    return SKILL_PARAMETER_KEY_RE.test(parameterKey)
+      ? { type: "bundle", parameterKey }
+      : null;
+  }
+  return null;
+}
+
+export function normalizeSkillBundles(
+  value: unknown,
+  maxCount = 100,
+): SkillBundle[] {
+  if (!Array.isArray(value)) return [];
+  const bundles: SkillBundle[] = [];
+  const seen = new Set<string>();
+
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const raw = item as Record<string, unknown>;
+    const id = trimString(raw.id, 160);
+    if (!SKILL_ID_RE.test(id) || seen.has(id)) continue;
+    const parameters = normalizeSkillParameters(raw.parameters);
+    const parameterKeys = new Set(parameters.map((parameter) => parameter.key));
+    const steps: SkillBundleStep[] = [];
+    const stepIds = new Set<string>();
+    for (const stepValue of Array.isArray(raw.steps)
+      ? raw.steps.slice(0, 4)
+      : []) {
+      if (!stepValue || typeof stepValue !== "object") continue;
+      const stepRaw = stepValue as Record<string, unknown>;
+      const skillId = trimString(stepRaw.skillId, 160);
+      const stepId = trimString(stepRaw.id, 160) || `${id}-${steps.length + 1}`;
+      if (!SKILL_ID_RE.test(skillId) || stepIds.has(stepId)) {
+        continue;
+      }
+      const bindings: Record<string, SkillParameterBinding> = {};
+      if (stepRaw.bindings && typeof stepRaw.bindings === "object") {
+        for (const [key, bindingValue] of Object.entries(stepRaw.bindings)) {
+          if (!SKILL_PARAMETER_KEY_RE.test(key)) continue;
+          const binding = normalizeSkillParameterBinding(bindingValue);
+          if (
+            !binding ||
+            (binding.type === "bundle" &&
+              !parameterKeys.has(binding.parameterKey))
+          ) {
+            continue;
+          }
+          bindings[key] = binding;
+        }
+      }
+      stepIds.add(stepId);
+      steps.push({ id: stepId, skillId, bindings });
+    }
+    if (steps.length === 0) continue;
+    bundles.push({
+      id,
+      title: trimString(raw.title, 160) || titleCaseIdentifier(id),
+      description: trimString(raw.description, 2_000),
+      parameters,
+      steps,
+      createdAt: trimString(raw.createdAt, 80) || undefined,
+      updatedAt: trimString(raw.updatedAt, 80) || undefined,
+    });
+    seen.add(id);
+    if (bundles.length >= maxCount) break;
+  }
+
+  return bundles;
 }
 
 export function normalizeTextSkill(value: unknown): TextSkill | null {
@@ -642,15 +797,22 @@ export function buildSkillPromptContext({
   ];
 
   for (const applied of skills) {
+    const resolvedContent = renderSkillTemplate(
+      applied.skill,
+      applied.parameters,
+    );
     sections.push(
       [
         `Skill: ${applied.skill.title}`,
         `ID: ${applied.skill.id}`,
         `Mode: ${applied.mode}`,
         `Category: ${applied.skill.category}`,
+        applied.bundleId ? `Bundle: ${applied.bundleId}` : "",
         "Instructions:",
-        applied.skill.content,
-      ].join("\n"),
+        resolvedContent,
+      ]
+        .filter(Boolean)
+        .join("\n"),
     );
   }
 
@@ -662,16 +824,173 @@ export function buildSkillPromptContext({
   );
 }
 
+export class SkillParameterValidationError extends Error {
+  readonly skillId: string;
+  readonly parameterKey?: string;
+
+  constructor(skillId: string, message: string, parameterKey?: string) {
+    super(message);
+    this.name = "SkillParameterValidationError";
+    this.skillId = skillId;
+    this.parameterKey = parameterKey;
+  }
+}
+
+function escapeSkillParameterValue(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+export function resolveSkillParameterValues(
+  skill: Pick<TextSkill, "id" | "parameters">,
+  values: Readonly<Record<string, string>> = {},
+): Record<string, string> {
+  const resolved: Record<string, string> = {};
+  for (const parameter of skill.parameters || []) {
+    const rawValue = values[parameter.key] ?? parameter.defaultValue ?? "";
+    const value = String(rawValue).trim();
+    if (!value && parameter.required) {
+      throw new SkillParameterValidationError(
+        skill.id,
+        `Missing required skill parameter: ${parameter.key}`,
+        parameter.key,
+      );
+    }
+    if (value.length > parameter.maxLength) {
+      throw new SkillParameterValidationError(
+        skill.id,
+        `Skill parameter exceeds ${parameter.maxLength} characters: ${parameter.key}`,
+        parameter.key,
+      );
+    }
+    if (
+      value &&
+      parameter.input === "select" &&
+      !parameter.options?.some((option) => option.value === value)
+    ) {
+      throw new SkillParameterValidationError(
+        skill.id,
+        `Invalid option for skill parameter: ${parameter.key}`,
+        parameter.key,
+      );
+    }
+    if (value) resolved[parameter.key] = value;
+  }
+  return resolved;
+}
+
+export function getMissingSkillParameters(
+  skill: Pick<TextSkill, "id" | "parameters">,
+  values: Readonly<Record<string, string>> = {},
+): SkillParameterDefinition[] {
+  return (skill.parameters || []).filter(
+    (parameter) =>
+      parameter.required &&
+      !String(values[parameter.key] ?? parameter.defaultValue ?? "").trim(),
+  );
+}
+
+export function renderSkillTemplate(
+  skill: Pick<TextSkill, "id" | "content" | "parameters">,
+  values: Readonly<Record<string, string>> = {},
+): string {
+  const parameters = new Map(
+    (skill.parameters || []).map((parameter) => [parameter.key, parameter]),
+  );
+  const resolved = resolveSkillParameterValues(skill, values);
+  const unknownSlots = new Set<string>();
+  const rendered = skill.content.replace(
+    SKILL_SLOT_RE,
+    (_slot, key: string) => {
+      if (!parameters.has(key)) {
+        unknownSlots.add(key);
+        return "";
+      }
+      return escapeSkillParameterValue(resolved[key] || "");
+    },
+  );
+  if (unknownSlots.size > 0) {
+    const key = [...unknownSlots][0];
+    throw new SkillParameterValidationError(
+      skill.id,
+      `Unknown skill parameter slot: ${key}`,
+      key,
+    );
+  }
+  return rendered;
+}
+
+export function resolveSkillBundle({
+  bundle,
+  skills,
+  values = {},
+  mode = "manual",
+}: {
+  bundle: SkillBundle;
+  skills: readonly TextSkill[];
+  values?: Readonly<Record<string, string>>;
+  mode?: AppliedSkill["mode"];
+}): AppliedSkill[] {
+  const bundleValues = resolveSkillParameterValues(
+    { id: bundle.id, parameters: bundle.parameters },
+    values,
+  );
+  const byId = new Map(skills.map((skill) => [skill.id, skill]));
+  const applied: AppliedSkill[] = [];
+  for (const step of bundle.steps.slice(0, 4)) {
+    const skill = byId.get(step.skillId);
+    if (!skill) {
+      throw new SkillParameterValidationError(
+        bundle.id,
+        `Bundle references a missing skill: ${step.skillId}`,
+      );
+    }
+    const parameterValues: Record<string, string> = {};
+    for (const [key, binding] of Object.entries(step.bindings)) {
+      parameterValues[key] =
+        binding.type === "literal"
+          ? binding.value
+          : bundleValues[binding.parameterKey] || "";
+    }
+    resolveSkillParameterValues(skill, parameterValues);
+    applied.push({
+      skill,
+      mode,
+      parameters: parameterValues,
+      bundleId: bundle.id,
+    });
+  }
+  return applied;
+}
+
 function formatListField(label: string, values: readonly string[]): string {
   return values.length > 0 ? `${label}: ${values.join("; ")}` : "";
+}
+
+function formatSkillParameterMetadata(
+  parameter: SkillParameterDefinition,
+): string {
+  return [
+    `key=${parameter.key}`,
+    `required=${parameter.required === true}`,
+    `default=${JSON.stringify(parameter.defaultValue || "")}`,
+    `options=${JSON.stringify(
+      (parameter.options || []).map((option) => option.value),
+    )}`,
+    `maxLength=${parameter.maxLength}`,
+  ].join("; ");
 }
 
 export function buildSkillMetadataContext({
   skills,
   maxChars = DEFAULT_METADATA_CONTEXT_CHARS,
+  includeParameters = false,
 }: {
   skills: readonly SkillCatalogEntry[];
   maxChars?: number;
+  includeParameters?: boolean;
 }): string {
   if (skills.length === 0 || maxChars <= 0) return "";
 
@@ -705,6 +1024,12 @@ export function buildSkillMetadataContext({
         formatListField("use_when", skill.activation.useWhen),
         formatListField("avoid_when", skill.activation.avoidWhen),
         formatListField("examples", skill.activation.exampleQueries),
+        ...(includeParameters
+          ? (skill.parameters || []).map(
+              (parameter) =>
+                `parameter: ${formatSkillParameterMetadata(parameter)}`,
+            )
+          : []),
       ]
         .filter(Boolean)
         .join("\n"),
@@ -713,22 +1038,52 @@ export function buildSkillMetadataContext({
 
   const full = sections.join("\n\n---\n\n");
   if (full.length <= maxChars) return full;
-  return (
-    full.slice(0, Math.max(0, maxChars - 92)).trimEnd() +
-    "\n\n[Additional installed skills metadata omitted because of context limits.]"
-  );
+  const truncationNotice =
+    "\n\n[Additional installed skills metadata omitted because of context limits.]";
+  if (includeParameters) {
+    if (truncationNotice.length >= maxChars) {
+      return truncationNotice.slice(0, maxChars);
+    }
+    return (
+      full.slice(0, Math.max(0, maxChars - truncationNotice.length)).trimEnd() +
+      truncationNotice
+    );
+  }
+  return full.slice(0, Math.max(0, maxChars - 92)).trimEnd() + truncationNotice;
 }
 
 export function createSkillInvocations(
   appliedSkills: readonly AppliedSkill[],
 ): AppliedSkillInvocation[] {
-  return appliedSkills.map(({ skill, mode }) => ({
+  return appliedSkills.map(({ skill, mode, parameters, bundleId }, order) => ({
     id: skill.id,
     title: skill.title,
     description: skill.description,
     category: skill.category,
     mode,
+    schemaVersion: 2,
+    definitionHash: createSkillDefinitionHash(skill),
+    order,
+    parameters:
+      parameters && Object.keys(parameters).length > 0
+        ? { ...parameters }
+        : undefined,
+    bundleId,
   }));
+}
+
+export function createSkillDefinitionHash(skill: TextSkill): string {
+  const input = JSON.stringify({
+    id: skill.id,
+    content: skill.content,
+    parameters: skill.parameters || [],
+  });
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `fnv1a-${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
 export function normalizeSkillIdRefs(

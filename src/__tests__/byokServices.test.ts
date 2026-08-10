@@ -5,6 +5,9 @@ const mocks = vi.hoisted(() => ({
   coreGetState: vi.fn(),
   getTaskModel: vi.fn(),
   settingsGetState: vi.fn(),
+  getImageCompressionConfig: vi.fn(),
+  compressImageAttachments: vi.fn(),
+  prepareGeneratedImageAttachments: vi.fn(),
 }));
 
 vi.mock("@/store/core/coreSettingsStore", () => ({
@@ -35,6 +38,12 @@ vi.mock("@/store/core/memoryStore", () => ({
       markMemoriesUsed: vi.fn(),
     }),
   },
+}));
+
+vi.mock("@/lib/utils/imageCompression", () => ({
+  compressImageAttachments: mocks.compressImageAttachments,
+  getImageCompressionConfig: mocks.getImageCompressionConfig,
+  prepareGeneratedImageAttachments: mocks.prepareGeneratedImageAttachments,
 }));
 
 vi.mock("@/utils/pluginUtils", () => ({
@@ -124,6 +133,17 @@ describe("BYOK service requests", () => {
         resultsLimit: 5,
       },
     });
+    mocks.getImageCompressionConfig.mockReturnValue({
+      enabled: true,
+      maxSizeMB: 1,
+      maxWidthOrHeight: 1024,
+    });
+    mocks.compressImageAttachments.mockImplementation(
+      async (attachments) => attachments,
+    );
+    mocks.prepareGeneratedImageAttachments.mockImplementation(
+      async (attachments) => attachments,
+    );
   });
 
   it("allows chat helper calls to use server env fallback without sending apiKey", async () => {
@@ -211,6 +231,65 @@ describe("BYOK service requests", () => {
     for (const call of fetchMock.mock.calls) {
       expect(call[1]?.signal).toBe(controller.signal);
     }
+  });
+
+  it("prepares direct image inputs and outputs around the API request", async () => {
+    const inputAttachment = {
+      id: "input",
+      mimeType: "image/png",
+      data: "aW5wdXQ=",
+      fileName: "input.png",
+    };
+    const outputAttachment = {
+      id: "output",
+      mimeType: "image/png",
+      data: "b3V0cHV0",
+      fileName: "output.png",
+    };
+    const preparedOutput = {
+      ...outputAttachment,
+      data: "Y29tcHJlc3NlZA==",
+      displayCache: {
+        opfsUrl: "opfs://images/generated/output.png",
+        sourceKind: "data" as const,
+        sourceFingerprint: "compressed-fingerprint",
+        createdAt: 1,
+      },
+    };
+    mocks.prepareGeneratedImageAttachments.mockResolvedValue([preparedOutput]);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        Response.json({ images: [outputAttachment], message: "done" }),
+      );
+    const { generateImage } = await import("../services/api/chatService");
+
+    const result = await generateImage("env-provider:gemini-title", "paint", {
+      attachments: [inputAttachment],
+    });
+
+    expect(mocks.compressImageAttachments).toHaveBeenCalledWith(
+      [inputAttachment],
+      {
+        enabled: true,
+        maxSizeMB: 1,
+        maxWidthOrHeight: 1024,
+      },
+      { signal: undefined },
+    );
+    expect(getJsonRequestBody(fetchMock).attachments).toEqual([
+      inputAttachment,
+    ]);
+    expect(mocks.prepareGeneratedImageAttachments).toHaveBeenCalledWith(
+      [outputAttachment],
+      {
+        enabled: true,
+        maxSizeMB: 1,
+        maxWidthOrHeight: 1024,
+      },
+      { signal: undefined },
+    );
+    expect(result.images).toEqual([preparedOutput]);
   });
 
   it("allows voice model STT to use server env fallback without sending apiKey", async () => {

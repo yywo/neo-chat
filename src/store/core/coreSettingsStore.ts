@@ -16,7 +16,10 @@ import {
   normalizeModelProvider,
   normalizeModelProviders,
 } from "@/lib/providers/config";
-import { OPENAI_COMPATIBLE_PROVIDER_TYPE } from "@/lib/providers/providerTypes";
+import {
+  OPENAI_COMPATIBLE_PROVIDER_TYPE,
+  normalizeProviderTypeValue,
+} from "@/lib/providers/providerTypes";
 import { logDevError } from "@/lib/utils/devLogger";
 import { reportAppRestoreHydration } from "@/lib/data/appRestoreJournal";
 import {
@@ -220,10 +223,39 @@ export const useCoreSettingsStore = create<CoreSettingsState>()(
 
       applyServerConfig: (config) =>
         set((state) => {
+          const savedDefaultProvider = state.providers.find(
+            (provider) =>
+              provider.id === SERVER_DEFAULT_PROVIDER_ID ||
+              provider.isServerDefault,
+          );
           const userProviders = state.providers.filter(
             (provider) => !provider.isServerDefault,
           );
           const providerModels = config.modelProvider.models;
+          const savedProviderType = normalizeProviderTypeValue(
+            savedDefaultProvider?.type,
+          );
+          const serverProviderType = normalizeProviderTypeValue(
+            config.modelProvider.type,
+          );
+          const canReuseSavedDefault =
+            Boolean(savedDefaultProvider) &&
+            savedProviderType !== null &&
+            savedProviderType === serverProviderType;
+          const defaultProviderModels =
+            providerModels.length > 0
+              ? providerModels
+              : canReuseSavedDefault
+                ? savedDefaultProvider?.models || []
+                : [];
+          const defaultProviderModelsList =
+            providerModels.length > 0
+              ? providerModels
+              : canReuseSavedDefault
+                ? savedDefaultProvider?.modelsList ||
+                  savedDefaultProvider?.models ||
+                  []
+                : [];
 
           if (!config.modelProvider.available) {
             return {
@@ -241,9 +273,12 @@ export const useCoreSettingsStore = create<CoreSettingsState>()(
             type: config.modelProvider.type,
             baseUrl: "default",
             apiKey: "",
+            apiKeySecret: canReuseSavedDefault
+              ? savedDefaultProvider?.apiKeySecret
+              : undefined,
             enabled: true,
-            models: providerModels,
-            modelsList: providerModels,
+            models: defaultProviderModels,
+            modelsList: defaultProviderModelsList,
             isServerDefault: true,
           });
 
@@ -303,9 +338,7 @@ export const useCoreSettingsStore = create<CoreSettingsState>()(
       partialize: (state) => ({
         theme: state.theme,
         language: state.language,
-        providers: state.providers
-          .filter((provider) => !provider.isServerDefault)
-          .map(stripProviderPlainSecret),
+        providers: state.providers.map(stripProviderPlainSecret),
         defaultModels: state.defaultModels,
       }),
       onRehydrateStorage: () => {

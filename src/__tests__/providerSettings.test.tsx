@@ -1,0 +1,174 @@
+// @vitest-environment jsdom
+
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelProvider } from "@/types";
+import ProviderSettings from "@/components/settings/ProviderSettings";
+
+const mocks = vi.hoisted(() => ({
+  coreState: {
+    _hasHydrated: true,
+    providers: [] as ModelProvider[],
+    addProvider: vi.fn(),
+    updateProvider: vi.fn(),
+    deleteProvider: vi.fn(),
+  },
+  signedApiFetch: vi.fn(),
+}));
+
+vi.mock("next-intl", () => ({
+  useTranslations: () => (key: string, values?: Record<string, unknown>) =>
+    values ? `${key}:${JSON.stringify(values)}` : key,
+}));
+
+vi.mock("@/store/core/settingsStore", async () => {
+  const { normalizeProviderBaseUrl } = await import("@/lib/security/urlPolicy");
+  return {
+    formatModelName: (model: string) => model,
+    getEffectiveBaseUrl: normalizeProviderBaseUrl,
+    useSettingsStore: () => ({
+      modelMetadata: {},
+      customModelMetadata: {},
+    }),
+  };
+});
+
+vi.mock("@/store/core/coreSettingsStore", () => ({
+  useCoreSettingsStore: () => mocks.coreState,
+}));
+
+vi.mock("@/lib/api/client", () => ({
+  getResponseErrorMessage: vi.fn(),
+  readJsonResponseOrThrow: vi.fn(),
+  signedApiFetch: mocks.signedApiFetch,
+}));
+
+vi.mock("@/lib/byok/client", () => ({
+  buildProviderRuntimeConfig: vi.fn(
+    async (provider: ModelProvider) => provider,
+  ),
+  fetchWithByokRetry: vi.fn(
+    async (request: () => Promise<Response>) => await request(),
+  ),
+}));
+
+vi.mock("@/lib/security/localSecrets", () => ({
+  encryptLocalSecret: vi.fn(async () => ({
+    version: 1,
+    algorithm: "AES-GCM",
+    iv: "iv",
+    ciphertext: "ciphertext",
+  })),
+  LOCAL_SECRET_CONTEXTS: {
+    providerApiKey: (providerId: string) => `provider:${providerId}`,
+  },
+}));
+
+function provider(
+  id: string,
+  overrides: Partial<ModelProvider> = {},
+): ModelProvider {
+  return {
+    id,
+    name: id,
+    type: "OpenAI Compatible",
+    baseUrl: `https://${id.toLowerCase()}.example`,
+    apiKey: "",
+    enabled: true,
+    models: [],
+    modelsList: [],
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  mocks.coreState.providers = [];
+  mocks.coreState.addProvider.mockReset();
+  mocks.coreState.updateProvider.mockReset();
+  mocks.coreState.deleteProvider.mockReset();
+  mocks.signedApiFetch.mockReset();
+});
+
+afterEach(cleanup);
+
+describe("ProviderSettings", () => {
+  it("does not carry an unsaved API key draft to another provider", async () => {
+    mocks.coreState.providers = [
+      provider("DEFAULT", {
+        name: "Server default",
+        baseUrl: "default",
+        isServerDefault: true,
+      }),
+      provider("CUSTOM", { name: "Custom" }),
+    ];
+
+    render(<ProviderSettings />);
+
+    const defaultKeyInput = await screen.findByLabelText("apiKey");
+    fireEvent.change(defaultKeyInput, { target: { value: "default-key" } });
+    fireEvent.click(screen.getByRole("button", { name: /Custom/ }));
+
+    const customKeyInput = await screen.findByLabelText("apiKey");
+    expect((customKeyInput as HTMLInputElement).value).toBe("");
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "saveSecret",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "saveSecret" }));
+    expect(mocks.coreState.updateProvider).not.toHaveBeenCalled();
+  });
+
+  it("preserves the current URL draft and model request on unrelated provider updates", async () => {
+    mocks.coreState.providers = [
+      provider("FIRST"),
+      provider("SECOND", { name: "Second" }),
+    ];
+    let requestSignal: AbortSignal | undefined;
+    mocks.signedApiFetch.mockImplementation(
+      (_url: string, init?: RequestInit) => {
+        requestSignal = init?.signal || undefined;
+        return new Promise<Response>(() => undefined);
+      },
+    );
+
+    const view = render(<ProviderSettings />);
+    const baseUrlInput = await screen.findByLabelText("apiBaseUrl");
+    fireEvent.change(baseUrlInput, {
+      target: { value: "https://draft.example" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /fetchModelsAria/ }));
+
+    await vi.waitFor(() => expect(mocks.signedApiFetch).toHaveBeenCalledOnce());
+    expect(requestSignal?.aborted).toBe(false);
+
+    mocks.coreState.providers = [
+      mocks.coreState.providers[0],
+      { ...mocks.coreState.providers[1], name: "Second renamed" },
+    ];
+    await act(async () => {
+      view.rerender(<ProviderSettings />);
+    });
+
+    expect(
+      (screen.getByLabelText("apiBaseUrl") as HTMLInputElement).value,
+    ).toBe("https://draft.example");
+    expect(requestSignal?.aborted).toBe(false);
+  });
+
+  it("does not throw while rendering a persisted invalid base URL", () => {
+    mocks.coreState.providers = [provider("INVALID", { baseUrl: "https://" })];
+
+    expect(() => render(<ProviderSettings />)).not.toThrow();
+    expect(screen.queryByText(/^preview/)).toBeNull();
+  });
+});

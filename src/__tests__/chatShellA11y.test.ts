@@ -40,8 +40,9 @@ describe("chat shell accessibility", () => {
       "window.innerWidth < DESKTOP_SIDEBAR_BREAKPOINT",
     );
     expect(panelNavigation).toContain(
-      "window.innerWidth >= DESKTOP_SIDEBAR_BREAKPOINT",
+      "window.innerWidth >= EXPANDED_SIDEBAR_BREAKPOINT",
     );
+    expect(panelNavigation).toContain("setIsSidebarOpen(shouldExpandSidebar)");
     expect(panelNavigation).toContain(
       "const isSidebarDrawerOpen = isSidebarOpen && isNonDesktopViewport",
     );
@@ -131,11 +132,13 @@ describe("chat shell accessibility", () => {
     );
     const searchButtonSection = messageInput.slice(
       messageInput.indexOf("{/* Search Button */}"),
-      messageInput.indexOf("{/* File Upload Button */}"),
+      messageInput.indexOf("{/* Agent Mode Button */}"),
     );
 
     expect(searchButtonSection).not.toContain("aria-disabled");
-    expect(searchButtonSection).toContain("getSearchUnavailableMessage");
+    expect(searchButtonSection).toContain("aria-label={searchToggleAriaLabel}");
+    expect(messageInput).toContain("const searchToggleAriaLabel");
+    expect(messageInput).toContain("getSearchUnavailableMessage");
   });
 
   it("does not force mobile keyboards open when editing an old message", () => {
@@ -185,13 +188,16 @@ describe("chat shell accessibility", () => {
   });
 
   it("finds the last user message once before rendering the list", () => {
-    const chatShell = readFileSync(
-      resolve(process.cwd(), "src/components/app/ChatAppShell.tsx"),
+    const timeline = readFileSync(
+      resolve(
+        process.cwd(),
+        "src/components/chat/VirtualizedMessageTimeline.tsx",
+      ),
       "utf8",
     );
 
-    expect(chatShell).toContain("let lastUserMessageIndex = -1");
-    expect(chatShell).toContain("idx === lastUserMessageIndex");
-    expect(chatShell).not.toContain("messages.slice(idx + 1)");
+    expect(timeline).toContain("const lastUserMessageIndex = React.useMemo");
+    expect(timeline).toContain("row.messageIndex !== lastUserMessageIndex");
+    expect(timeline).not.toContain("messages.slice(row.messageIndex + 1)");
   });
 });

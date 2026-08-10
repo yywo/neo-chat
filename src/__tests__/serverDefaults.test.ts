@@ -507,7 +507,10 @@ describe("server default configuration", () => {
       await import("../lib/defaultConfig/server");
     const runtimeConfig = getDefaultProviderRuntimeConfig();
 
-    expect(runtimeConfig).toBeNull();
+    expect(runtimeConfig).toMatchObject({
+      type: "Google",
+    });
+    expect(runtimeConfig).not.toHaveProperty("apiKey");
 
     const { GET } = await import("../app/api/config/route");
     const response = await GET();
@@ -516,11 +519,19 @@ describe("server default configuration", () => {
     const text = JSON.stringify(body);
 
     expect(response.status).toBe(200);
-    expect(publicConfig.modelProvider.available).toBe(false);
-    expect(body.modelProvider.available).toBe(false);
+    expect(publicConfig.modelProvider.available).toBe(true);
+    expect(body.modelProvider.available).toBe(true);
     expect(text).not.toContain("gemini-fallback-secret");
     expect(text).not.toContain("api-fallback-secret");
     expect(text).not.toContain("openai-fallback-secret");
+  });
+
+  it("keeps the default provider hidden when it has no configuration", async () => {
+    const { getDefaultProviderRuntimeConfig, getPublicServerConfig } =
+      await import("../lib/defaultConfig/server");
+
+    expect(getDefaultProviderRuntimeConfig()).toBeNull();
+    expect(getPublicServerConfig().modelProvider.available).toBe(false);
   });
 
   it("uses server default provider credentials when fetching model lists", async () => {

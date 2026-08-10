@@ -10,14 +10,16 @@ import {
   fetchWithByokRetry,
 } from "@/lib/byok/client";
 import { logDevError } from "@/lib/utils/devLogger";
+import { SEARCH_CONFIG_LIMITS } from "@/config/limits";
 
 export interface SearchOptions {
   query: string;
   scope?: string;
+  maxResults?: number;
 }
 
 export async function createSearchProvider(
-  { query, scope }: SearchOptions,
+  { query, scope, maxResults }: SearchOptions,
   signal?: AbortSignal,
 ) {
   const { search } = useSettingsStore.getState();
@@ -27,7 +29,15 @@ export async function createSearchProvider(
   }
 
   const config = search.configs[provider] || {};
-  const maxResult = search.resultsLimit || 5;
+  const configuredResultCount = search.resultsLimit || 5;
+  const requestedResultCount =
+    typeof maxResults === "number" && Number.isFinite(maxResults)
+      ? Math.round(maxResults)
+      : configuredResultCount;
+  const maxResult = Math.min(
+    SEARCH_CONFIG_LIMITS.maxResultsLimit,
+    Math.max(SEARCH_CONFIG_LIMITS.minResultsLimit, requestedResultCount),
+  );
 
   try {
     const response = await fetchWithByokRetry(async () =>
@@ -40,6 +50,7 @@ export async function createSearchProvider(
           provider,
           query,
           scope,
+          timeRange: search.timeRange,
           config: await buildSearchRuntimeConfig(provider, config, signal),
           maxResult,
         }),

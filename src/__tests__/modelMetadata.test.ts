@@ -104,6 +104,28 @@ describe("model metadata normalization", () => {
     });
   });
 
+  it("preserves provider-qualified keys for custom metadata maps", () => {
+    const normalized = normalizeModelMetadataMap(
+      {
+        "provider-a:shared": {
+          id: "shared",
+          name: "Provider A Shared",
+        },
+        "provider-b:shared": {
+          id: "shared",
+          name: "Provider B Shared",
+        },
+      },
+      { preserveKeys: true },
+    );
+
+    expect(Object.keys(normalized)).toEqual([
+      "provider-a:shared",
+      "provider-b:shared",
+    ]);
+    expect(normalized["provider-a:shared"]?.id).toBe("shared");
+  });
+
   it("sanitizes reasoning effort options to supported explicit strengths", () => {
     const metadata = normalizeModelMetadata({
       id: "gpt-effort",

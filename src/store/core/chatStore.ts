@@ -17,7 +17,11 @@ import {
   STORAGE_KEYS,
   STORAGE_VERSION,
 } from "../storage/storageConfig";
-import { normalizeMessage, normalizeMessages } from "../storage/migrations";
+import {
+  normalizeMessage,
+  normalizeMessages,
+  normalizeMessageTreeMessages,
+} from "../storage/migrations";
 import { normalizeChatConfig } from "@/lib/settings/appConfig";
 import {
   normalizeSession,
@@ -45,6 +49,7 @@ import {
   normalizeSessionMessageTree,
   removeMessageFromTree,
   removeMessageSubtree,
+  selectMessageBranch,
   switchMessageBranch,
   updateMessageInTree,
 } from "@/lib/chat/messageTree";
@@ -67,10 +72,51 @@ const normalizeStoredMessageTree = (
   stored: Message[] | SessionMessageTree | null | undefined,
 ) => {
   if (isSessionMessageTree(stored)) {
-    return normalizeSessionMessageTree(stored);
+    return normalizeMessageTreeMessages(normalizeSessionMessageTree(stored));
   }
 
   return normalizeSessionMessageTree(normalizeMessages(stored));
+};
+
+const replaceOutputBlockText = (
+  outputBlocks: MessageOutputBlock[] | undefined,
+  content: string,
+): MessageOutputBlock[] | undefined => {
+  if (!outputBlocks?.length) return outputBlocks;
+
+  const textBlocks = outputBlocks.filter((block) => block.type === "text");
+
+  if (textBlocks.length === 0) {
+    return content
+      ? [...outputBlocks, { id: uuidv7(), type: "text" as const, content }]
+      : outputBlocks;
+  }
+
+  const totalOriginalLength = textBlocks.reduce(
+    (total, block) => total + block.content.length,
+    0,
+  );
+  let originalTextLength = 0;
+  let nextTextOffset = 0;
+  let textBlockIndex = 0;
+
+  return outputBlocks.map((block) => {
+    if (block.type !== "text") return block;
+
+    textBlockIndex += 1;
+    originalTextLength += block.content.length;
+    const isLastTextBlock = textBlockIndex === textBlocks.length;
+    const nextBoundary = isLastTextBlock
+      ? content.length
+      : totalOriginalLength > 0
+        ? Math.round(
+            (originalTextLength / totalOriginalLength) * content.length,
+          )
+        : nextTextOffset;
+    const nextContent = content.slice(nextTextOffset, nextBoundary);
+    nextTextOffset = nextBoundary;
+    return { ...block, content: nextContent };
+  });
 };
 
 const getReferencedChatMessageFileUrls = async ({
@@ -215,7 +261,7 @@ interface ChatState {
   ) => void;
 
   toggleSessionPin: (id: string) => void;
-  duplicateSession: (id: string) => Promise<void>;
+  duplicateSession: (id: string, duplicateTitle?: string) => Promise<void>;
 
   addMessage: (sessionId: string, message: Message) => Promise<void>;
   updateMessageContent: (
@@ -259,6 +305,11 @@ interface ChatState {
     sessionId: string,
     messageId: string,
     direction: "prev" | "next",
+  ) => void;
+  selectMessageVersion: (
+    sessionId: string,
+    messageId: string,
+    targetMessageId: string,
   ) => void;
 
   deleteMessage: (sessionId: string, messageId: string) => Promise<void>;
@@ -341,20 +392,20 @@ const applySessionConfig = (
   currentConfig: ChatConfig,
   sessionConfig?: SessionConfig,
 ): ChatConfig => {
-  if (!sessionConfig) return currentConfig;
   const hasReasoningConfig =
-    sessionConfig.reasoningMode !== undefined ||
-    sessionConfig.useReasoning !== undefined;
+    sessionConfig?.reasoningMode !== undefined ||
+    sessionConfig?.useReasoning !== undefined;
   const reasoningMode = hasReasoningConfig
     ? normalizeReasoningMode(
-        sessionConfig.reasoningMode,
-        sessionConfig.useReasoning,
+        sessionConfig?.reasoningMode,
+        sessionConfig?.useReasoning,
       )
     : currentConfig.reasoningMode;
 
   return normalizeChatConfig({
     ...currentConfig,
-    useSearch: sessionConfig.useSearch ?? currentConfig.useSearch,
+    useSearch: sessionConfig?.useSearch ?? currentConfig.useSearch,
+    useAgentMode: sessionConfig?.useAgentMode === true,
     useReasoning: isReasoningEnabled(reasoningMode),
     reasoningMode,
   });
@@ -429,14 +480,6 @@ export const useChatStore = create<ChatState>()(
 
         const initialMessageTree = createEmptyMessageTree();
 
-        // Apply config to global state if this becomes active
-        const sessionConfig = newSession.config;
-        if (sessionConfig) {
-          set({
-            chatConfig: applySessionConfig(get().chatConfig, sessionConfig),
-          });
-        }
-
         set((state) => ({
           sessions: [newSession, ...state.sessions],
           currentSessionId: newSession.id,
@@ -445,6 +488,7 @@ export const useChatStore = create<ChatState>()(
           isActiveSessionLoading: false,
           pendingSessionId: null,
           activeSessionLoadError: null,
+          chatConfig: applySessionConfig(state.chatConfig, newSession.config),
         }));
 
         return newSession.id;
@@ -726,7 +770,7 @@ export const useChatStore = create<ChatState>()(
         }));
       },
 
-      duplicateSession: async (id) => {
+      duplicateSession: async (id, duplicateTitle) => {
         const requestId = selectSessionRequestId + 1;
         selectSessionRequestId = requestId;
         const state = get();
@@ -764,7 +808,7 @@ export const useChatStore = create<ChatState>()(
         const newSession = normalizeSession({
           ...normalizeSession(original),
           id: newId,
-          title: `${original.title} (Copy)`,
+          title: duplicateTitle ?? `${original.title} (Copy)`,
           updatedAt: Date.now(),
           pinned: false,
           compression: undefined,
@@ -888,11 +932,14 @@ export const useChatStore = create<ChatState>()(
                 ...message,
                 content: content,
               };
+              const nextOutputBlocks =
+                outputBlocks ??
+                replaceOutputBlockText(message.outputBlocks, content);
               if (reasoning !== undefined) {
                 newMessage.reasoning = reasoning;
               }
-              if (outputBlocks !== undefined) {
-                newMessage.outputBlocks = outputBlocks;
+              if (nextOutputBlocks !== undefined) {
+                newMessage.outputBlocks = nextOutputBlocks;
               }
               return newMessage;
             },
@@ -1143,6 +1190,47 @@ export const useChatStore = create<ChatState>()(
             }),
           };
         });
+        if (treeToPersist) {
+          get().syncActiveSession(sessionId, treeToPersist);
+        }
+      },
+
+      selectMessageVersion: (sessionId, messageId, targetMessageId) => {
+        let treeToPersist: SessionMessageTree | null = null;
+
+        set((state) => {
+          if (state.currentSessionId !== sessionId) return {};
+
+          const newMessageTree = selectMessageBranch(
+            getMessageTreeFromState(state),
+            messageId,
+            targetMessageId,
+          );
+          const newMessages = getActiveMessagePath(newMessageTree);
+          treeToPersist = newMessageTree;
+          return {
+            activeMessageTree: newMessageTree,
+            activeMessages: newMessages,
+            sessions: state.sessions.map((session) => {
+              if (session.id !== sessionId) return session;
+              const shouldClearCompression =
+                !!session.compression?.lastCompressedMessageId &&
+                !isMessageInActivePath(
+                  newMessageTree,
+                  session.compression.lastCompressedMessageId,
+                );
+              return {
+                ...session,
+                messageCount: newMessages.length,
+                updatedAt: Date.now(),
+                compression: shouldClearCompression
+                  ? undefined
+                  : session.compression,
+              };
+            }),
+          };
+        });
+
         if (treeToPersist) {
           get().syncActiveSession(sessionId, treeToPersist);
         }

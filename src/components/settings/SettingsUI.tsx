@@ -271,7 +271,7 @@ export const CustomSelect = ({
         }`}
       >
         <div className="p-1">
-          {"options" in options[0]
+          {hasOptions && "options" in options[0]
             ? // Render Grouped Options
               (options as GroupedSelectOption[]).map((group, idx) => (
                 <div key={idx} role="group" aria-label={group.label}>

@@ -7,6 +7,8 @@ import type {
   KnowledgeFileIndexStatus,
   KnowledgeFileStorageStatus,
   KnowledgeFileStatus,
+  KnowledgeChunkingConfig,
+  KnowledgeChunkingStrategy,
 } from "@/types";
 
 const VALID_FILE_STATUSES = new Set<KnowledgeFileStatus>([
@@ -62,6 +64,37 @@ const COLLECTION_ICONS = new Set([
   "MessagesSquare",
   "Archive",
 ]);
+
+const CHUNKING_STRATEGIES = new Set<KnowledgeChunkingStrategy>([
+  "auto",
+  "recursive",
+  "markdown",
+]);
+
+export function normalizeKnowledgeChunking(
+  value: unknown,
+  defaultChunkSize = 512,
+): KnowledgeChunkingConfig {
+  const raw = value && typeof value === "object" ? (value as any) : {};
+  const strategy = CHUNKING_STRATEGIES.has(raw.strategy)
+    ? raw.strategy
+    : "recursive";
+  const chunkSizeValue = Math.floor(Number(raw.chunkSize));
+  const chunkSize = Number.isFinite(chunkSizeValue)
+    ? Math.min(4_096, Math.max(128, chunkSizeValue))
+    : Math.min(4_096, Math.max(128, Math.floor(defaultChunkSize) || 512));
+  const overlapValue = Math.floor(Number(raw.overlapPercent));
+  const overlapPercent = Number.isFinite(overlapValue)
+    ? Math.min(30, Math.max(0, overlapValue))
+    : 10;
+  return { strategy, chunkSize, overlapPercent };
+}
+
+export function createKnowledgeChunkingRevision(
+  chunking: KnowledgeChunkingConfig,
+): string {
+  return `${chunking.strategy}:${chunking.chunkSize}:${chunking.overlapPercent}`;
+}
 
 function trimString(value: unknown, maxChars: number, fallback = ""): string {
   if (typeof value !== "string") return fallback;
@@ -204,6 +237,7 @@ export function normalizeKnowledgeFile(file: unknown): KnowledgeFile | null {
   );
   const error = storageError || indexError || legacyError;
   const ragChunkCount = normalizeRagChunkCount(raw.ragChunkCount);
+  const indexedChunkingRevision = trimString(raw.indexedChunkingRevision, 120);
   const contentEditedAt = raw.contentEditedAt
     ? normalizeTimestamp(raw.contentEditedAt)
     : undefined;
@@ -226,6 +260,7 @@ export function normalizeKnowledgeFile(file: unknown): KnowledgeFile | null {
     indexStatus,
     ...(ragId ? { ragId } : {}),
     ...(ragChunkCount !== undefined ? { ragChunkCount } : {}),
+    ...(indexedChunkingRevision ? { indexedChunkingRevision } : {}),
     ...(sourcePath ? { sourcePath } : {}),
     ...(contentPath ? { contentPath, path: contentPath } : {}),
     ...(contentKind ? { contentKind } : {}),
@@ -240,6 +275,7 @@ export function normalizeKnowledgeFile(file: unknown): KnowledgeFile | null {
 
 export function normalizeKnowledgeCollection(
   collection: unknown,
+  defaultChunkSize = 512,
 ): Collection | null {
   if (!collection || typeof collection !== "object") return null;
 
@@ -257,6 +293,10 @@ export function normalizeKnowledgeCollection(
         .filter((file): file is KnowledgeFile => Boolean(file))
         .slice(0, KNOWLEDGE_LIMITS.maxFilesPerCollection)
     : [];
+  const chunking = normalizeKnowledgeChunking(raw.chunking, defaultChunkSize);
+  const chunkingRevision =
+    trimString(raw.chunkingRevision, 120) ||
+    createKnowledgeChunkingRevision(chunking);
 
   return {
     id,
@@ -272,12 +312,15 @@ export function normalizeKnowledgeCollection(
     icon: COLLECTION_ICONS.has(icon) ? icon : "Folder",
     color: COLLECTION_COLORS.has(color) ? color : "blue",
     files,
+    chunking,
+    chunkingRevision,
     updatedAt: normalizeTimestamp(raw.updatedAt),
   };
 }
 
 export function normalizeKnowledgeCollections(
   collections: unknown,
+  defaultChunkSize = 512,
 ): Collection[] {
   if (!Array.isArray(collections)) return [];
 
@@ -285,7 +328,10 @@ export function normalizeKnowledgeCollections(
   const seenIds = new Set<string>();
 
   for (const collection of collections) {
-    const normalizedCollection = normalizeKnowledgeCollection(collection);
+    const normalizedCollection = normalizeKnowledgeCollection(
+      collection,
+      defaultChunkSize,
+    );
     if (!normalizedCollection || seenIds.has(normalizedCollection.id)) continue;
 
     normalized.push(normalizedCollection);

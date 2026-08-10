@@ -23,15 +23,21 @@ const DefaultModelSettings = () => {
 
   // Aggregate all enabled models, grouped by Provider
   const groupedOptions: GroupedSelectOption[] = React.useMemo(() => {
-    return providers
-      .filter((p) => p.enabled && p.models.length > 0)
+    return (providers || [])
+      .filter(
+        (provider) =>
+          provider?.enabled &&
+          Array.isArray(provider.models) &&
+          provider.models.length > 0,
+      )
       .map((p) => ({
         label: p.name,
-        options: p.models.map((mId) => {
+        options: (p.models || []).map((mId) => {
           const displayName = formatModelName(
             mId,
             modelMetadata,
             customModelMetadata,
+            p.id,
           );
           return {
             value: `${p.id}:${mId}`,

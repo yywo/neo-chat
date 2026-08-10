@@ -306,4 +306,60 @@ describe("effective chat context", () => {
       "Global system prompt.",
     );
   });
+
+  it("derives effective Agent mode from the model tool-call capability", () => {
+    const baseOptions = {
+      selectedModel: "openai:gpt-tools",
+      provider: { type: "OpenAI" as const },
+      modelMetadata: {
+        "gpt-tools": {
+          id: "gpt-tools",
+          name: "GPT Tools",
+          tool_call: true,
+        },
+      },
+      customModelMetadata: {},
+      chatConfig: {
+        useSearch: false,
+        useReasoning: false,
+        useAgentMode: true,
+        reasoningMode: "off" as const,
+        temperature: 0.7,
+        useRAG: false,
+      },
+      search: {
+        provider: "google" as const,
+        configs: {},
+      },
+      rag: {
+        enabled: false,
+        url: "",
+        token: "",
+        topK: 10,
+        chunkSize: 512,
+        documentParseProvider: "mineru" as const,
+        mineruApiToken: "",
+        llamaParseApiKey: "",
+      },
+      installedPlugins: [],
+      pluginConfigs: {},
+      activePlugins: [],
+    };
+
+    const supported = resolveEffectiveChatContext(baseOptions);
+    const unsupported = resolveEffectiveChatContext({
+      ...baseOptions,
+      modelMetadata: {
+        "gpt-tools": {
+          ...baseOptions.modelMetadata["gpt-tools"],
+          tool_call: false,
+        },
+      },
+    });
+
+    expect(supported.modelCapabilities.toolCall).toBe(true);
+    expect(supported.agentModeEnabled).toBe(true);
+    expect(unsupported.modelCapabilities.toolCall).toBe(false);
+    expect(unsupported.agentModeEnabled).toBe(false);
+  });
 });

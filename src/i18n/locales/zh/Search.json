@@ -15,5 +15,12 @@
   "capabilityUnsupportedModel": "当前模型不支持内置搜索，请选择外部搜索服务。",
   "capabilityMissingBaseUrl": "{provider} 需要配置 Base URL。",
   "capabilityMissingKey": "{provider} 需要配置 API Key。",
-  "resultLimit": "结果数量上限"
+  "resultLimit": "结果数量上限",
+  "timeRange": "时间范围",
+  "timeRangeAny": "不限时间",
+  "timeRangeDay": "最近 24 小时",
+  "timeRangeWeek": "最近一周",
+  "timeRangeMonth": "最近一月",
+  "timeRangeYear": "最近一年",
+  "timeRangeHint": "仅在明确选择时间范围时，Firecrawl 才会限制结果时间。"
 }

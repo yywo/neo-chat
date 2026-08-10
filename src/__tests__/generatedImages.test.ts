@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { ATTACHMENT_LIMITS } from "../config/limits";
 import {
-  cacheGeneratedImageAttachments,
   normalizeGeneratedImageAttachment,
   normalizeGeneratedImageAttachments,
 } from "../lib/utils/generatedImages";
+import { prepareGeneratedImageAttachments } from "../lib/utils/imageCompression";
 import { streamGeminiResponse } from "../lib/streaming/gemini";
 import { streamOpenAIResponses } from "../lib/streaming/openai";
 import type { SSEMessage } from "../lib/streaming/sse";
@@ -123,10 +123,18 @@ describe("generated image attachment normalization", () => {
       },
     ]);
 
-    const cached = await cacheGeneratedImageAttachments([attachment], {
-      saveFile,
-      now: () => 456,
-    });
+    const cached = await prepareGeneratedImageAttachments(
+      [attachment],
+      {
+        enabled: false,
+        maxSizeMB: 1,
+        maxWidthOrHeight: 1024,
+      },
+      {
+        saveFile,
+        now: () => 456,
+      },
+    );
 
     expect(cached[0]).toMatchObject({
       id: "img_1",
@@ -151,10 +159,18 @@ describe("generated image attachment normalization", () => {
       },
     ]);
 
-    const cached = await cacheGeneratedImageAttachments([attachment], {
-      saveFile,
-      now: () => 456,
-    });
+    const cached = await prepareGeneratedImageAttachments(
+      [attachment],
+      {
+        enabled: true,
+        maxSizeMB: 1,
+        maxWidthOrHeight: 1024,
+      },
+      {
+        saveFile,
+        now: () => 456,
+      },
+    );
 
     expect(cached[0]).toMatchObject({
       id: "img_url",

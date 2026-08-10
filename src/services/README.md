@@ -43,9 +43,9 @@ the Responses `image_generation` tool; Gemini image models use
 modalities. `imageCount` is filled only by `resolveImageGenerationOptions`
 when the user clearly asks for multiple separate images, and provider paths
 ignore or report unsupported count semantics rather than saving it to settings.
-Plugin tool results that expose `images[]`, `imageUrl`, or `imageBase64` remain
-in compact tool details/history instead of being appended as automatic image
-output blocks.
+Plugin tool results that expose `images[]`, `imageUrl`, or `imageBase64` keep
+compact tool details/history while their normalized images are forwarded to the
+follow-up model round and rendered only inside the matching tool result.
 Before chat or image requests leave the browser, client services strip
 display-only OPFS cache metadata from attachments. Image outputs returned by
 provider routes are cached into OPFS for display, then rendered as runtime Blob

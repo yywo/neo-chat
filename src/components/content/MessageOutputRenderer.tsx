@@ -21,6 +21,7 @@ import ReasoningBlock from "./ReasoningBlock";
 import SourceBlock from "./SourceBlock";
 import ToolCallBlock from "./ToolCallBlock";
 import MemorySearchBlock from "./MemorySearchBlock";
+import TaskPlanBlock from "./TaskPlanBlock";
 import SafeImage from "../ui/SafeImage";
 
 interface MessageOutputRendererProps {
@@ -30,6 +31,7 @@ interface MessageOutputRendererProps {
   isThinking?: boolean;
   isErrorMessage?: boolean;
   searchSources: Source[];
+  ragSources?: Source[];
   onFileClick?: (file: MarkdownGeneratedFile) => void;
   forcedTheme?: MarkdownRendererProps["forcedTheme"];
   forceExpandCodeBlocks?: boolean;
@@ -47,6 +49,8 @@ interface MessageOutputRendererProps {
 
 const isMemorySearchTool = (name: string | undefined) =>
   name === "memory_search";
+
+const isWebSearchTool = (name: string | undefined) => name === "web_search";
 
 const ImageGenerationStatusBlock: React.FC<{ label: string }> = ({ label }) => (
   <div
@@ -161,6 +165,7 @@ const MessageOutputRenderer: React.FC<MessageOutputRendererProps> = ({
   isThinking = false,
   isErrorMessage = false,
   searchSources,
+  ragSources,
   onFileClick,
   forcedTheme,
   forceExpandCodeBlocks,
@@ -193,6 +198,7 @@ const MessageOutputRenderer: React.FC<MessageOutputRendererProps> = ({
                 content={block.content}
                 className={isErrorMessage ? "text-red-500" : undefined}
                 searchSources={searchSources}
+                ragSources={ragSources}
                 onFileClick={onFileClick}
                 isStreaming={isTyping}
                 forcedTheme={forcedTheme}
@@ -207,6 +213,14 @@ const MessageOutputRenderer: React.FC<MessageOutputRendererProps> = ({
                 reasoning={block.content}
                 isThinking={isThinking && index === blocks.length - 1}
                 durationMs={block.durationMs}
+              />
+            );
+          case "task_plan":
+            return (
+              <TaskPlanBlock
+                key={block.id}
+                steps={block.steps}
+                note={block.note}
               />
             );
           case "search":
@@ -240,7 +254,9 @@ const MessageOutputRenderer: React.FC<MessageOutputRendererProps> = ({
               isMemorySearchTool(toolCall.name),
             );
             const otherToolCalls = block.toolCalls.filter(
-              (toolCall) => !isMemorySearchTool(toolCall.name),
+              (toolCall) =>
+                !isMemorySearchTool(toolCall.name) &&
+                !isWebSearchTool(toolCall.name),
             );
 
             return (
@@ -264,4 +280,4 @@ const MessageOutputRenderer: React.FC<MessageOutputRendererProps> = ({
   );
 };
 
-export default MessageOutputRenderer;
+export default React.memo(MessageOutputRenderer);

@@ -17,7 +17,11 @@ import Tooltip from "../ui/Tooltip";
 import { ModelMetadata } from "@/types";
 import { MODEL_METADATA_LIMITS } from "@/config/limits";
 import { copyTextToClipboard } from "@/lib/utils/clipboard";
-import { supportsImageGeneration, supportsModality } from "@/lib/utils/model";
+import {
+  resolveProviderModelMetadata,
+  supportsImageGeneration,
+  supportsModality,
+} from "@/lib/utils/model";
 import {
   createTimedStatusResetController,
   type TimedStatusResetController,
@@ -83,9 +87,11 @@ const CapabilityIconToggle = ({
 };
 
 const ModelEditor = ({
+  providerId,
   modelId,
   onClose,
 }: {
+  providerId: string;
   modelId: string;
   onClose: () => void;
 }) => {
@@ -94,8 +100,12 @@ const ModelEditor = ({
     useSettingsStore();
 
   // Initial State derived from existing metadata (custom priority > fetched)
-  const initialMeta = customModelMetadata[modelId] ||
-    modelMetadata[modelId] || { id: modelId, name: formatModelName(modelId) };
+  const initialMeta = resolveProviderModelMetadata({
+    providerId,
+    modelName: modelId,
+    modelMetadata,
+    customModelMetadata,
+  }) || { id: modelId, name: formatModelName(modelId) };
 
   const [name, setName] = useState(initialMeta.name || "");
   const [capabilities, setCapabilities] = useState({
@@ -170,7 +180,7 @@ const ModelEditor = ({
         output: outputModalities.length > 0 ? outputModalities : undefined,
       },
     };
-    setCustomModelMetadata(modelId, newMeta);
+    setCustomModelMetadata(providerId, modelId, newMeta);
     onClose();
   };
 

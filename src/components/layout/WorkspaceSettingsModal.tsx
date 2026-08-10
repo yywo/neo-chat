@@ -39,6 +39,10 @@ import { normalizePluginIdRefs } from "@/lib/plugin/config";
 import { normalizeSkillIdRefs } from "@/lib/skills";
 import { localizePluginMeta } from "@/lib/plugin/localizedMeta";
 import { logDevError } from "@/lib/utils/devLogger";
+import {
+  compressImageFile,
+  getImageCompressionConfig,
+} from "@/lib/utils/imageCompression";
 
 interface WorkspaceSettingsModalProps {
   onClose: () => void;
@@ -89,7 +93,7 @@ const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
   const tConfig = useTranslations("Config");
   const { createWorkspace, updateWorkspace, deleteWorkspace } = useChatStore();
   const { collections } = useKnowledgeStore();
-  const { installedPlugins, installedSkills } = useSettingsStore();
+  const { installedPlugins, installedSkills, system } = useSettingsStore();
 
   const [workspaceId] = useState(workspace?.id || uuidv7());
   const [name, setName] = useState(workspace?.name || "");
@@ -282,8 +286,14 @@ const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
 
       for (const file of selection.accepted) {
         try {
+          const preparedFile = file.type.startsWith("image/")
+            ? await compressImageFile(file, getImageCompressionConfig(system))
+            : file;
           // Save to OPFS workspace folder
-          const url = await saveToOPFS(file, `workspaces/${workspaceId}`);
+          const url = await saveToOPFS(
+            preparedFile,
+            `workspaces/${workspaceId}`,
+          );
           if (!isMountedRef.current || fileUploadRunRef.current !== runId) {
             await cleanupWorkspaceUploadUrls([url]);
             await cleanupNewFiles();
@@ -292,8 +302,8 @@ const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
 
           newFiles.push({
             id: uuidv7(),
-            fileName: file.name,
-            mimeType: file.type || "application/octet-stream",
+            fileName: preparedFile.name,
+            mimeType: preparedFile.type || "application/octet-stream",
             url: url, // Store OPFS URL
             data: undefined, // No base64
           });

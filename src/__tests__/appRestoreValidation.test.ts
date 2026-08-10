@@ -83,7 +83,7 @@ describe("restored application startup validation", () => {
   it("accepts a consistent chat state and message tree", async () => {
     const db = createDb({
       [STORAGE_KEYS.CHAT]: validChatState(),
-      session_messages_session1: validMessageTree(),
+      "session_messages_session-1": validMessageTree(),
     });
 
     await expect(
@@ -94,7 +94,7 @@ describe("restored application startup validation", () => {
   it("rejects a current session reference that no longer exists", async () => {
     const db = createDb({
       [STORAGE_KEYS.CHAT]: validChatState("missing-session"),
-      session_messages_session1: validMessageTree(),
+      "session_messages_session-1": validMessageTree(),
     });
 
     await expect(validateRestoredAppData(createSnapshot(), db)).rejects.toThrow(
@@ -105,7 +105,7 @@ describe("restored application startup validation", () => {
   it("rejects a malformed message tree even when it is not current", async () => {
     const db = createDb({
       [STORAGE_KEYS.CHAT]: validChatState(),
-      session_messages_session1: validMessageTree(),
+      "session_messages_session-1": validMessageTree(),
       session_messages_orphan: {
         nodesById: { broken: null },
         rootMessageIds: ["broken"],
@@ -117,12 +117,112 @@ describe("restored application startup validation", () => {
     );
   });
 
+  it("rejects message data without a matching chat session", async () => {
+    const db = createDb({
+      [STORAGE_KEYS.CHAT]: validChatState(),
+      "session_messages_session-1": validMessageTree(),
+      session_messages_orphan: validMessageTree(),
+    });
+
+    await expect(validateRestoredAppData(createSnapshot(), db)).rejects.toThrow(
+      "session_messages_orphan has no matching chat session",
+    );
+  });
+
+  it("rejects a non-empty chat session without persisted message data", async () => {
+    const db = createDb({
+      [STORAGE_KEYS.CHAT]: validChatState(),
+    });
+
+    await expect(validateRestoredAppData(createSnapshot(), db)).rejects.toThrow(
+      "session session-1 has no matching message data",
+    );
+  });
+
+  it("rejects a session message count that differs from its active path", async () => {
+    const db = createDb({
+      [STORAGE_KEYS.CHAT]: validChatState(),
+      "session_messages_session-1": {
+        nodesById: {},
+        rootMessageIds: [],
+      },
+    });
+
+    await expect(validateRestoredAppData(createSnapshot(), db)).rejects.toThrow(
+      "does not match the session message count",
+    );
+  });
+
+  it.each([
+    [
+      "missing root",
+      {
+        ...validMessageTree(),
+        rootMessageIds: ["missing"],
+      },
+    ],
+    [
+      "broken parent reference",
+      {
+        nodesById: {
+          message1: {
+            ...validMessageTree().nodesById.message1,
+            parentMessageId: "missing",
+          },
+        },
+        rootMessageIds: [],
+      },
+    ],
+    [
+      "broken child reference",
+      {
+        nodesById: {
+          message1: {
+            ...validMessageTree().nodesById.message1,
+            childMessageIds: ["missing"],
+          },
+        },
+        rootMessageIds: ["message1"],
+        activeRootMessageId: "message1",
+      },
+    ],
+    [
+      "invalid active root",
+      {
+        ...validMessageTree(),
+        activeRootMessageId: "missing",
+      },
+    ],
+    [
+      "invalid active child",
+      {
+        nodesById: {
+          message1: {
+            ...validMessageTree().nodesById.message1,
+            activeChildMessageId: "missing",
+          },
+        },
+        rootMessageIds: ["message1"],
+        activeRootMessageId: "message1",
+      },
+    ],
+  ])("rejects a message tree with a %s", async (_label, tree) => {
+    const db = createDb({
+      [STORAGE_KEYS.CHAT]: validChatState(),
+      "session_messages_session-1": tree,
+    });
+
+    await expect(validateRestoredAppData(createSnapshot(), db)).rejects.toThrow(
+      "session_messages_session-1 is inconsistent",
+    );
+  });
+
   it("rejects unsupported keys in the rollback snapshot", async () => {
     const snapshot = createSnapshot();
     snapshot.managedDbKeys.push("unmanaged-secret-store");
     const db = createDb({
       [STORAGE_KEYS.CHAT]: validChatState(),
-      session_messages_session1: validMessageTree(),
+      "session_messages_session-1": validMessageTree(),
     });
 
     await expect(validateRestoredAppData(snapshot, db)).rejects.toThrow(

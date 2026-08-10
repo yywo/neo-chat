@@ -1,5 +1,6 @@
 import { MARKET_LIMITS, PLUGIN_EXECUTION_LIMITS } from "@/config/limits";
 import type { Plugin, PluginFunction } from "@/types";
+import type { McpTransport } from "../plugin/types";
 import { DEFAULT_MCP_SERVER_LOGO_URL } from "./defaults";
 
 export const MCP_REGISTRY_BASE_URL =
@@ -18,6 +19,7 @@ export interface McpRegistryTool {
 }
 
 interface NormalizedMcpRemote {
+  transport: McpTransport;
   serverUrl: string;
   auth?: Plugin["auth"];
   headers?: Record<string, string>;
@@ -261,29 +263,35 @@ function getRemoteEndpoint(
 ): NormalizedMcpRemote | null {
   const remotes = Array.isArray(server.remotes) ? server.remotes : [];
 
-  for (const remote of remotes) {
-    if (!isRecord(remote)) continue;
+  for (const preferredTransport of [
+    "streamable-http",
+    "sse",
+  ] as const satisfies readonly McpTransport[]) {
+    for (const remote of remotes) {
+      if (!isRecord(remote)) continue;
 
-    const transport =
-      trimString(remote.type, 80) || trimString(remote.transport, 80);
-    if (transport !== "streamable-http") continue;
+      const transport =
+        trimString(remote.type, 80) || trimString(remote.transport, 80);
+      if (transport !== preferredTransport) continue;
 
-    const rawUrl = trimString(
-      remote.url,
-      MARKET_LIMITS.maxPluginManifestUrlChars,
-    );
-    if (!rawUrl || hasUnresolvedUrlVariables(rawUrl, remote)) continue;
+      const rawUrl = trimString(
+        remote.url,
+        MARKET_LIMITS.maxPluginManifestUrlChars,
+      );
+      if (!rawUrl || hasUnresolvedUrlVariables(rawUrl, remote)) continue;
 
-    const serverUrl = normalizeHttpUrl(rawUrl);
-    if (!serverUrl) continue;
+      const serverUrl = normalizeHttpUrl(rawUrl);
+      if (!serverUrl) continue;
 
-    const headerMetadata = normalizeRemoteHeaders(remote);
-    if (!headerMetadata) continue;
+      const headerMetadata = normalizeRemoteHeaders(remote);
+      if (!headerMetadata) continue;
 
-    return {
-      serverUrl,
-      ...headerMetadata,
-    };
+      return {
+        transport: preferredTransport,
+        serverUrl,
+        ...headerMetadata,
+      };
+    }
   }
 
   return null;
@@ -363,7 +371,7 @@ export function normalizeMcpRegistryServers(
       categories: ["MCP"],
       auth: remote.auth || { type: "none", required: false },
       mcp: {
-        transport: "streamable-http",
+        transport: remote.transport,
         serverUrl: remote.serverUrl,
         serverName,
         serverVersion,

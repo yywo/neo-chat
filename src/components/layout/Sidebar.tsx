@@ -54,6 +54,7 @@ import {
 import { CHAT_ENTITY_LIMITS } from "@/config/limits";
 import { sanitizeDownloadFilename } from "@/lib/utils/filename";
 import { createSessionExportPayload } from "@/lib/chat/sessionExport";
+import { getSessionDisplayTitle } from "@/lib/chat/sessionTitle";
 import { logDevError } from "@/lib/utils/devLogger";
 import {
   DropdownMenu,
@@ -139,7 +140,11 @@ const getSidebarFocusableElements = (container: HTMLElement | null) => {
 
   return Array.from(
     container.querySelectorAll<HTMLElement>(SIDEBAR_FOCUSABLE_SELECTOR),
-  ).filter((element) => !element.getAttribute("aria-hidden"));
+  ).filter(
+    (element) =>
+      !element.closest('[inert], [aria-hidden="true"]') &&
+      !element.getAttribute("aria-hidden"),
+  );
 };
 
 const Sidebar: React.FC<SidebarProps> = ({
@@ -215,6 +220,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [renameOriginalTitle, setRenameOriginalTitle] = useState("");
 
   // Section Expansion State
   const [expandedSections, setExpandedSections] = useState<{
@@ -259,14 +265,23 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   useEffect(() => {
     if (!focusedWorkspaceId || !isOpen) return;
-    requestAnimationFrame(() => {
+    let focusFrameId: number | null = null;
+    const frameId = requestAnimationFrame(() => {
       const target = Array.from(
         sidebarRef.current?.querySelectorAll<HTMLElement>(
           "[data-workspace-id]",
         ) ?? [],
       ).find((element) => element.dataset.workspaceId === focusedWorkspaceId);
       target?.scrollIntoView({ block: "center", behavior: "smooth" });
+      focusFrameId = requestAnimationFrame(() => {
+        target?.querySelector<HTMLElement>("button")?.focus();
+      });
     });
+
+    return () => {
+      cancelAnimationFrame(frameId);
+      if (focusFrameId !== null) cancelAnimationFrame(focusFrameId);
+    };
   }, [focusedWorkspaceId, isOpen]);
 
   useEffect(() => {
@@ -427,7 +442,9 @@ const Sidebar: React.FC<SidebarProps> = ({
     downloadAnchorNode.setAttribute("href", url);
     downloadAnchorNode.setAttribute(
       "download",
-      sanitizeDownloadFilename(`chat_export_${session.title}.json`),
+      sanitizeDownloadFilename(
+        `chat_export_${getSessionDisplayTitle(session.title, t("newChat"))}.json`,
+      ),
     );
     document.body.appendChild(downloadAnchorNode);
     downloadAnchorNode.click();
@@ -438,16 +455,25 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const handleStartRename = (sessionId: string, currentTitle: string) => {
     setRenamingId(sessionId);
-    setRenameValue(currentTitle);
+    setRenameOriginalTitle(currentTitle);
+    setRenameValue(getSessionDisplayTitle(currentTitle, t("newChat")));
     setContextMenu(null);
     setPendingDeleteSessionId(null);
   };
 
   const submitRename = () => {
     if (renamingId && renameValue.trim()) {
-      onRenameSession(renamingId, renameValue.trim());
+      const nextTitle = renameValue.trim();
+      const originalDisplayTitle = getSessionDisplayTitle(
+        renameOriginalTitle,
+        t("newChat"),
+      );
+      if (nextTitle !== originalDisplayTitle) {
+        onRenameSession(renamingId, nextTitle);
+      }
     }
     setRenamingId(null);
+    setRenameOriginalTitle("");
   };
 
   const handleKeyDownRename = (e: React.KeyboardEvent) => {
@@ -584,11 +610,14 @@ const Sidebar: React.FC<SidebarProps> = ({
     : undefined;
 
   const renderSessionItem = (session: Session) => {
+    const displayTitle = getSessionDisplayTitle(session.title, t("newChat"));
     const isActive =
       currentSessionId === session.id &&
       !isPluginMarketOpen &&
       !isAssistantHubOpen &&
+      !isSkillMarketOpen &&
       !isKnowledgeBaseOpen &&
+      !isGlobalSearchOpen &&
       !isSettingsOpen;
 
     return (
@@ -608,7 +637,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           <div className="flex w-full items-center gap-1">
             <input
               ref={renameInputRef}
-              aria-label={t("renameAria", { title: session.title })}
+              aria-label={t("renameAria", { title: displayTitle })}
               name="session-title"
               value={renameValue}
               onChange={(e) => setRenameValue(e.target.value)}
@@ -620,7 +649,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             />
             <button
               type="button"
-              aria-label={t("saveTitleAria", { title: session.title })}
+              aria-label={t("saveTitleAria", { title: displayTitle })}
               className="rounded p-0.5 text-green-600 transition-colors hover:bg-green-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/60 dark:hover:bg-green-900/30"
               onMouseDown={submitRename}
             >
@@ -628,7 +657,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             </button>
             <button
               type="button"
-              aria-label={t("cancelRenameAria", { title: session.title })}
+              aria-label={t("cancelRenameAria", { title: displayTitle })}
               className="rounded p-0.5 text-red-500 transition-colors hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/60 dark:hover:bg-red-900/30"
               onMouseDown={() => setRenamingId(null)}
             >
@@ -652,12 +681,12 @@ const Sidebar: React.FC<SidebarProps> = ({
                   aria-hidden="true"
                 />
               )}
-              <span className="truncate">{session.title}</span>
+              <span className="truncate">{displayTitle}</span>
             </button>
 
             <button
               type="button"
-              aria-label={t("moreActionsAria", { title: session.title })}
+              aria-label={t("moreActionsAria", { title: displayTitle })}
               className={`absolute right-2 rounded-lg p-1 opacity-100 transition-[opacity,background-color] hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 md:opacity-0 md:group-hover:opacity-100 dark:hover:bg-accent ${contextMenu?.sessionId === session.id ? "opacity-100" : ""}`}
               onClick={(e) => handleContextMenu(e, session.id)}
             >
@@ -706,7 +735,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     },
   ) => {
     if (items.length === 0) return null;
-    const isExpanded = expandedSections[sectionKey];
+    const isExpanded = expandedSections[sectionKey] === true;
 
     const contentId = `${sidebarId}-section-${sectionKey}`;
 
@@ -728,6 +757,8 @@ const Sidebar: React.FC<SidebarProps> = ({
         </button>
         <div
           id={contentId}
+          inert={isExpanded ? undefined : true}
+          aria-hidden={!isExpanded}
           className={`grid transition-[grid-template-rows,opacity] duration-300 ease-in-out ${isExpanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}
         >
           <div className="overflow-hidden">
@@ -991,7 +1022,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                         wsSessions.length - WORKSPACE_SESSION_PREVIEW_LIMIT,
                         0,
                       );
-                      const isExpanded = expandedSections[ws.id];
+                      const isExpanded = expandedSections[ws.id] === true;
                       const folderColorClass = ws.color
                         ? WORKSPACE_COLOR_MAP[ws.color]
                         : "text-blue-500";
@@ -1411,6 +1442,10 @@ const Sidebar: React.FC<SidebarProps> = ({
                 const hasMessages = session.messageCount > 0;
                 const isConfirmingDelete =
                   pendingDeleteSessionId === session.id;
+                const displayTitle = getSessionDisplayTitle(
+                  session.title,
+                  t("newChat"),
+                );
 
                 return (
                   <>
@@ -1532,8 +1567,8 @@ const Sidebar: React.FC<SidebarProps> = ({
                     <DropdownMenuItem
                       aria-label={
                         isConfirmingDelete
-                          ? t("confirmDeleteAria", { title: session.title })
-                          : t("deleteAria", { title: session.title })
+                          ? t("confirmDeleteAria", { title: displayTitle })
+                          : t("deleteAria", { title: displayTitle })
                       }
                       variant="destructive"
                       className={

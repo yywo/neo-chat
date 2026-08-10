@@ -25,4 +25,6 @@ export const BYOK_CONTEXTS = {
   elevenLabs: "voice:elevenlabs",
   mimo: "voice:mimo",
   pluginAuth: (pluginId: string) => `plugin:${pluginId}:auth`,
+  bridgeDiscovery: "mcp:bridge-discovery",
+  syncRemote: "sync:remote-credentials",
 } as const;

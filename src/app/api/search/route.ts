@@ -22,7 +22,7 @@ import { safeServerLogError } from "@/lib/utils/safeServerLog";
 export async function POST(request: NextRequest) {
   try {
     const body = SearchRequestSchema.parse(await readJsonRequestBody(request));
-    const { provider, query, scope, config, maxResult } = body;
+    const { provider, query, scope, timeRange, config, maxResult } = body;
     const defaultSearch =
       provider === "default" ? getDefaultSearchRuntimeConfig() : null;
     const effectiveProvider = (defaultSearch?.provider ||
@@ -49,6 +49,7 @@ export async function POST(request: NextRequest) {
         provider: effectiveProvider,
         query,
         scope,
+        timeRange,
         apiKey,
         baseUrl,
         maxResultNumber,

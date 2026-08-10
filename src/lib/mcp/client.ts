@@ -1,7 +1,12 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import {
+  StreamableHTTPClientTransport,
+  StreamableHTTPError,
+} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import { PLUGIN_EXECUTION_LIMITS } from "@/config/limits";
+import type { McpTransport } from "../plugin/types";
 import { assertOutboundUrlAllowed } from "../security/safeFetch";
 import { getSafeUrlPolicy, validateOutboundUrl } from "../security/urlPolicy";
 
@@ -14,6 +19,7 @@ export interface McpAuthConfig {
 
 export interface McpClientRequestOptions {
   serverUrl: string;
+  transport?: McpTransport;
   authConfig?: McpAuthConfig;
   staticHeaders?: Record<string, string>;
   timeoutMs?: number;
@@ -30,6 +36,11 @@ export interface McpTool {
   description?: string;
   inputSchema?: Record<string, unknown>;
   [key: string]: unknown;
+}
+
+export interface McpToolDiscoveryResult {
+  tools: McpTool[];
+  transport: McpTransport;
 }
 
 const MCP_CLIENT_INFO = {
@@ -274,38 +285,105 @@ const validateMcpFetchTarget: typeof fetch = (input, init) => {
   return safeMcpFetch(input, init);
 };
 
+type McpClientTransport = StreamableHTTPClientTransport | SSEClientTransport;
+
+function createMcpTransport(
+  options: McpClientRequestOptions,
+  transport: McpTransport,
+): McpClientTransport {
+  const serverUrl = resolveMcpServerUrl(options.serverUrl, options.authConfig);
+  const transportOptions = {
+    requestInit: buildRequestInit(options.authConfig, options.staticHeaders),
+    fetch: validateMcpFetchTarget,
+  };
+
+  return transport === "sse"
+    ? new SSEClientTransport(serverUrl, transportOptions)
+    : new StreamableHTTPClientTransport(serverUrl, transportOptions);
+}
+
+async function connectMcpClient(
+  options: McpClientRequestOptions,
+  transportType: McpTransport,
+  requestOptions: RequestOptions,
+): Promise<{ client: Client; transport: McpClientTransport }> {
+  const transport = createMcpTransport(options, transportType);
+  const client = new Client(MCP_CLIENT_INFO, { capabilities: {} });
+
+  try {
+    await client.connect(transport, requestOptions);
+    return { client, transport };
+  } catch (error) {
+    await transport.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+function shouldFallbackToSse(error: unknown): boolean {
+  return (
+    error instanceof StreamableHTTPError &&
+    (error.code === 404 || error.code === 405)
+  );
+}
+
 async function withMcpClient<T>(
   options: McpClientRequestOptions,
   operation: (client: Client, requestOptions: RequestOptions) => Promise<T>,
-): Promise<T> {
-  const transport = new StreamableHTTPClientTransport(
-    resolveMcpServerUrl(options.serverUrl, options.authConfig),
-    {
-      requestInit: buildRequestInit(options.authConfig, options.staticHeaders),
-      fetch: validateMcpFetchTarget,
-    },
-  );
-  const client = new Client(MCP_CLIENT_INFO, { capabilities: {} });
+): Promise<{ value: T; transport: McpTransport }> {
   const requestOptions: RequestOptions = {
     timeout: options.timeoutMs || MCP_REQUEST_TIMEOUT_MS,
     signal: options.signal,
   };
+  let transportType = options.transport || "streamable-http";
+  let connection: Awaited<ReturnType<typeof connectMcpClient>> | undefined;
 
   try {
-    await client.connect(transport, requestOptions);
-    return await operation(client, requestOptions);
+    try {
+      connection = await connectMcpClient(
+        options,
+        transportType,
+        requestOptions,
+      );
+    } catch (error) {
+      if (transportType !== "streamable-http" || !shouldFallbackToSse(error)) {
+        throw error;
+      }
+
+      transportType = "sse";
+      connection = await connectMcpClient(
+        options,
+        transportType,
+        requestOptions,
+      );
+    }
+
+    return {
+      value: await operation(connection.client, requestOptions),
+      transport: transportType,
+    };
   } finally {
-    await transport.close().catch(() => undefined);
+    await connection?.transport.close().catch(() => undefined);
   }
+}
+
+export async function discoverMcpTools(
+  options: McpClientRequestOptions,
+): Promise<McpToolDiscoveryResult> {
+  const result = await withMcpClient(options, (client, requestOptions) =>
+    client.listTools(undefined, requestOptions),
+  );
+  return {
+    tools: Array.isArray(result.value.tools)
+      ? (result.value.tools as McpTool[])
+      : [],
+    transport: result.transport,
+  };
 }
 
 export async function listMcpTools(
   options: McpClientRequestOptions,
 ): Promise<McpTool[]> {
-  const result = await withMcpClient(options, (client, requestOptions) =>
-    client.listTools(undefined, requestOptions),
-  );
-  return Array.isArray(result.tools) ? (result.tools as McpTool[]) : [];
+  return (await discoverMcpTools(options)).tools;
 }
 
 export async function callMcpTool(
@@ -314,7 +392,7 @@ export async function callMcpTool(
     args: Record<string, unknown>;
   },
 ): Promise<unknown> {
-  return withMcpClient(options, (client, requestOptions) =>
+  const result = await withMcpClient(options, (client, requestOptions) =>
     client.callTool(
       {
         name: options.toolName,
@@ -324,4 +402,5 @@ export async function callMcpTool(
       requestOptions,
     ),
   );
+  return result.value;
 }

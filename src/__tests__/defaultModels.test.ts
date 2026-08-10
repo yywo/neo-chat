@@ -69,4 +69,15 @@ describe("default model pruning", () => {
   it("does not synthesize Gemini models when no provider is available", () => {
     expect(buildAvailableModels([], {}, {}, () => null)).toEqual([]);
   });
+
+  it("returns an empty select value when providers have no models", () => {
+    expect(
+      getDefaultModelSelectValue(defaultModels, "titleGeneration", []),
+    ).toBe("");
+    expect(
+      getDefaultModelSelectValue(defaultModels, "titleGeneration", [
+        { ...providers[0], models: undefined as unknown as string[] },
+      ]),
+    ).toBe("");
+  });
 });

@@ -12,6 +12,7 @@ const {
   saveToOPFSMock,
   upsertToRAGMock,
   withResolvedObjectUrlMock,
+  writeBlobToOPFSMock,
   writeToOPFSMock,
 } = vi.hoisted(() => ({
   deleteFromOPFSMock: vi.fn(() => Promise.resolve()),
@@ -40,6 +41,7 @@ const {
   saveToOPFSMock: vi.fn(() => Promise.resolve("opfs://saved/file.txt")),
   upsertToRAGMock: vi.fn(() => Promise.resolve(true)),
   withResolvedObjectUrlMock: vi.fn(() => Promise.resolve("reindexed text")),
+  writeBlobToOPFSMock: vi.fn(() => Promise.resolve()),
   writeToOPFSMock: vi.fn(() => Promise.resolve()),
 }));
 
@@ -50,6 +52,7 @@ vi.mock("@/utils/opfs", () => ({
   resolveOPFSBlob: resolveOPFSBlobMock,
   resolveOPFSUrl: vi.fn(() => Promise.resolve("blob:opfs-file")),
   saveToOPFS: saveToOPFSMock,
+  writeBlobToOPFS: writeBlobToOPFSMock,
   writeToOPFS: writeToOPFSMock,
 }));
 
@@ -129,6 +132,8 @@ const makeCollection = (files: Collection["files"] = []): Collection => ({
   description: "",
   icon: "Folder",
   color: "blue",
+  chunking: { strategy: "recursive", chunkSize: 512, overlapPercent: 10 },
+  chunkingRevision: "recursive:512:10",
   files,
   updatedAt: 1,
 });
@@ -241,6 +246,54 @@ describe("knowledge store resource cleanup", () => {
     ).rejects.toThrow("Failed to clean up knowledge file resources.");
 
     expect(useKnowledgeStore.getState().collections[0]?.files).toEqual([file]);
+    expect(writeBlobToOPFSMock).toHaveBeenCalledWith(
+      file.path,
+      expect.any(Blob),
+    );
+  });
+
+  it("preserves local file resources when RAG deletion fails and removes them on retry", async () => {
+    const sourcePath = "opfs://knowledge-base/collection-1/source/notes.pdf";
+    const contentPath = "opfs://knowledge-base/collection-1/content/notes.txt";
+    const file = {
+      id: "file-1",
+      name: "notes.pdf",
+      size: 12,
+      type: "application/pdf",
+      uploadedAt: 1,
+      status: "indexed" as const,
+      sourcePath,
+      contentPath,
+      path: contentPath,
+      contentKind: "extracted_text" as const,
+      ragId: "file-1",
+      ragChunkCount: 2,
+    };
+    useKnowledgeStore.setState({
+      collections: [makeCollection([file])],
+    });
+    deleteFromRAGMock.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    await expect(
+      useKnowledgeStore.getState().deleteFile("collection-1", "file-1"),
+    ).rejects.toThrow("Failed to clean up knowledge file resources.");
+
+    expect(deleteFromRAGMock).toHaveBeenCalledWith(
+      ["file-1_0", "file-1_1"],
+      "collection-1",
+    );
+    expect(deleteFromOPFSMock).not.toHaveBeenCalledWith(sourcePath);
+    expect(deleteFromOPFSMock).not.toHaveBeenCalledWith(contentPath);
+    expect(useKnowledgeStore.getState().collections[0]?.files).toEqual([file]);
+
+    await expect(
+      useKnowledgeStore.getState().deleteFile("collection-1", "file-1"),
+    ).resolves.toBeUndefined();
+
+    expect(deleteFromRAGMock).toHaveBeenCalledTimes(2);
+    expect(deleteFromOPFSMock).toHaveBeenCalledWith(sourcePath);
+    expect(deleteFromOPFSMock).toHaveBeenCalledWith(contentPath);
+    expect(useKnowledgeStore.getState().collections[0]?.files).toEqual([]);
   });
 
   it("cleans a newly saved OPFS file when upload completion is stale", async () => {

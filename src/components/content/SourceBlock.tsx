@@ -43,6 +43,8 @@ const SourceBlock: React.FC<SourceBlockProps> = ({
     error,
     visibleImagesCount,
   });
+  const hasResults = presentation.hasSources || presentation.hasImages;
+  const visibleError = hasResults ? undefined : error;
 
   if (!presentation.shouldRender) return null;
 
@@ -50,13 +52,13 @@ const SourceBlock: React.FC<SourceBlockProps> = ({
   // which stays English for non-UI consumers).
   const presentationLabel = isSearching
     ? t("labelSearching")
-    : error
-      ? t("labelSearchFailed")
-      : presentation.hasSources && presentation.hasImages
-        ? t("labelSourcesAndImages")
-        : presentation.hasImages
-          ? t("labelImages")
-          : t("labelSources");
+    : presentation.hasSources && presentation.hasImages
+      ? t("labelSourcesAndImages")
+      : presentation.hasImages
+        ? t("labelImages")
+        : presentation.hasSources
+          ? t("labelSources")
+          : t("labelSearchFailed");
 
   const handleImageClick = (e: React.MouseEvent, index: number) => {
     e.preventDefault();
@@ -79,20 +81,24 @@ const SourceBlock: React.FC<SourceBlockProps> = ({
         onClick={() => !isSearching && setIsExpanded(!isExpanded)}
         className={`w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-gray-600 dark:text-muted-foreground transition-colors select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 ${isSearching ? "cursor-wait" : "cursor-pointer hover:bg-gray-100/50 dark:hover:bg-accent/30"}`}
       >
-        {isSearching ? (
-          <LoaderCircle
-            size={14}
-            className="animate-spin text-blue-500"
-            aria-hidden="true"
-          />
-        ) : (
-          <BookOpen size={14} className="text-blue-500" aria-hidden="true" />
-        )}
-        <span className="flex-1 text-left truncate">{presentationLabel}</span>
+        <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-blue-500">
+          {isSearching ? (
+            <LoaderCircle
+              size={12}
+              className="animate-spin"
+              aria-hidden="true"
+            />
+          ) : (
+            <BookOpen size={12} aria-hidden="true" />
+          )}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-left">
+          {presentationLabel}
+        </span>
         {!isSearching && (
           <ChevronDown
             size={14}
-            className={`transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`}
+            className={`shrink-0 transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`}
             aria-hidden="true"
           />
         )}
@@ -103,18 +109,18 @@ const SourceBlock: React.FC<SourceBlockProps> = ({
         id={panelId}
         role="region"
         aria-label={t("searchSourcesAndImages")}
-        className={`grid transition-[grid-template-rows,opacity] duration-300 ease-in-out ${(isExpanded || error) && !isSearching ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}
+        className={`grid transition-[grid-template-rows,opacity] duration-300 ease-in-out ${isExpanded && !isSearching ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}
       >
         <div className="overflow-hidden">
           {/* Lazy Render Content */}
-          {(isExpanded || error) && !isSearching && (
+          {isExpanded && !isSearching && (
             <div className="px-3 py-3 border-t border-gray-200/50 dark:border-border bg-white/40 dark:bg-card/40">
-              {error && (
+              {visibleError && (
                 <div
                   role="status"
                   className="text-xs text-red-600 dark:text-red-400"
                 >
-                  {error}
+                  {visibleError}
                 </div>
               )}
               {/* Source List */}

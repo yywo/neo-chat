@@ -2,8 +2,8 @@
 
 Neo Chat plugins expose executable tools to compatible model providers. A
 plugin can come from an OpenAPI manifest, a built-in definition, or a remote
-streamable HTTP MCP server. Enabled plugin functions are sent to the model as
-tools, and runtime tool calls execute through server routes. Plugins are
+HTTP-based MCP server. Enabled plugin functions are sent to the model as tools,
+and runtime tool calls execute through server routes. Plugins are
 different from Skills: Skills are text-only prompt-context instructions stored
 locally, while plugins and MCP servers are network-capable tools executed by
 the server-side plugin route.
@@ -60,17 +60,27 @@ MCP servers live in `installedPlugins`, enabled MCP servers live in
 local-secret path as OpenAPI plugins. There is no separate `activeMcpServers`
 store.
 
-Version 1 supports remote `streamable-http` MCP servers discovered from the
-official MCP Registry or configured by the user. It does not launch local stdio
-processes, npm packages, Docker containers, or OAuth login flows. User-
-configured MCP server URLs may use HTTP or HTTPS and may target localhost or a
-private network in local or hosted deployments. The official Registry fetch
-remains HTTPS-only.
+The application supports `streamable-http` and legacy `sse` MCP servers
+discovered from the official MCP Registry or configured by the user. It
+prefers Streamable HTTP when both are advertised and safely retries legacy SSE
+only when Streamable HTTP connection setup returns 404 or 405. Local
+deployments may run the separate authenticated
+[stdio bridge](mcp-stdio-bridge.md), which translates a startup allowlist of
+stdio processes to a Streamable HTTP interface. The local-only custom MCP
+dialog can discover its authenticated `/servers` list through a
+request-proof-protected BYOK proxy and imports each descriptor with
+`plugin.mcp.source = "bridge"`. The web application never receives or launches
+commands, arguments, or environment configuration. User-configured MCP server
+URLs may use HTTP or HTTPS and may target localhost or a private network in
+local or hosted deployments. The official Registry fetch remains HTTPS-only.
 
 During installation, the server route opens a short-lived MCP SDK client,
 calls `listTools`, converts the tools into `PluginFunction` entries, registers
 the resulting plugin in the server registry, and returns it to the browser for
-local installation. Local tool names use a deterministic format:
+local installation. Registry servers that require a header credential prompt
+for it before discovery; the browser sends a BYOK-encrypted envelope and stores
+the credential in its local encrypted-secret store. Local tool names use a
+deterministic format:
 
 ```text
 mcp_<server_slug>__<sanitized_tool_name>

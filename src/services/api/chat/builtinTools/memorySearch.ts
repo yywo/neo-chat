@@ -1,16 +1,13 @@
+import { MEMORY_LIMITS } from "@/config/limits";
 import {
   searchMemoryRecords,
   shouldExposeMemorySearchTool,
 } from "@/lib/memory/entities";
-import {
-  formatMemoryToolResult,
-  MEMORY_SEARCH_TOOL,
-  MEMORY_SEARCH_TOOL_NAME,
-} from "@/lib/memory/tools";
+import { formatMemoryToolResult, MEMORY_SEARCH_TOOL } from "@/lib/memory/tools";
 import { useMemoryStore } from "@/store/core/memoryStore";
 
-import { MEMORY_LIMITS } from "@/config/limits";
-import type { ChatToolDefinition } from "./types";
+import type { ChatToolDefinition } from "../types";
+import type { BuiltinToolBinding } from "./types";
 
 function coerceToolDefinition(tool: unknown): ChatToolDefinition {
   return tool as ChatToolDefinition;
@@ -35,22 +32,7 @@ function getNumberArg(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-export function addInternalMemoryTools(
-  tools: ChatToolDefinition[],
-  toolNames: Set<string>,
-  message: string,
-): void {
-  if (!isMemorySearchEnabled()) return;
-  if (!shouldExposeMemorySearchTool(message)) return;
-  tools.push(coerceToolDefinition(MEMORY_SEARCH_TOOL));
-  toolNames.add(MEMORY_SEARCH_TOOL_NAME);
-}
-
-export function isInternalMemoryTool(name: string | undefined): boolean {
-  return name === MEMORY_SEARCH_TOOL_NAME;
-}
-
-export async function executeMemorySearchTool(args: unknown): Promise<unknown> {
+async function executeMemorySearch(args: unknown): Promise<unknown> {
   const state = useMemoryStore.getState();
   const { _hasHydrated, settings, memories } = state;
   if (
@@ -71,4 +53,23 @@ export async function executeMemorySearchTool(args: unknown): Promise<unknown> {
   const results = searchMemoryRecords(memories, query, limit);
   state.markMemoriesUsed(results.map((memory) => memory.id));
   return formatMemoryToolResult(results);
+}
+
+export function collectMemorySearchBinding(
+  message: string,
+): BuiltinToolBinding | null {
+  if (!isMemorySearchEnabled()) return null;
+  if (!shouldExposeMemorySearchTool(message)) return null;
+
+  return {
+    definition: coerceToolDefinition(MEMORY_SEARCH_TOOL),
+    risk: "read",
+    displayKey: "memorySearch",
+    execute: async (args, { signal }) => {
+      signal?.throwIfAborted();
+      const result = await executeMemorySearch(args);
+      signal?.throwIfAborted();
+      return result;
+    },
+  };
 }

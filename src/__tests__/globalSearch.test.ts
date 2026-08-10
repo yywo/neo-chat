@@ -98,6 +98,8 @@ const collection: Collection = {
   updatedAt: 1_500,
   icon: "book",
   color: "blue",
+  chunking: { strategy: "recursive", chunkSize: 512, overlapPercent: 10 },
+  chunkingRevision: "recursive:512:10",
   files: [
     {
       id: "file-1",

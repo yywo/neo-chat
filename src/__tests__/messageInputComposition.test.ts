@@ -3,6 +3,41 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("MessageInput composition", () => {
+  it("omits the model capability preview while retaining capability gates", () => {
+    const messageInput = readFileSync(
+      resolve(process.cwd(), "src/components/chat/MessageInput.tsx"),
+      "utf8",
+    );
+    const localeCatalogs = ["en", "zh", "ja"]
+      .map((locale) =>
+        readFileSync(
+          resolve(
+            process.cwd(),
+            `src/i18n/locales/${locale}/MessageInput.json`,
+          ),
+          "utf8",
+        ),
+      )
+      .join("\n");
+    const removedKeys = [
+      "selectModelWithCapabilitiesAria",
+      "modelCapabilityPreflight",
+      "capabilityAttachments",
+      "capabilityImages",
+      "capabilityTools",
+      "capabilityReasoning",
+      "capabilitySupported",
+      "capabilityUnavailable",
+    ];
+
+    expect(messageInput).toContain('t("selectModelAria"');
+    expect(messageInput).toContain("modelCapabilities");
+    removedKeys.forEach((key) => {
+      expect(messageInput).not.toContain(key);
+      expect(localeCatalogs).not.toContain(`"${key}"`);
+    });
+  });
+
   it("keeps attachment tray presentation outside the composer container", () => {
     const messageInput = readFileSync(
       resolve(process.cwd(), "src/components/chat/MessageInput.tsx"),
@@ -70,6 +105,20 @@ describe("MessageInput composition", () => {
     expect(messageInput).toContain("handlePolishInput");
     expect(messageInput).toContain("reasoningOptions");
     expect(messageInput).toContain("reasoningMode");
+    expect(messageInput).toContain("Bot");
+    expect(messageInput).toContain("agentModeEnabled");
+    expect(messageInput).toContain("handleAgentModeToggle");
+    expect(messageInput).toContain("!modelCapabilities.toolCall");
+    expect(messageInput).toContain("setChatConfig({ useAgentMode });");
+    expect(messageInput).toContain(
+      "updateSessionConfig(currentSessionId, { useAgentMode });",
+    );
+    expect(messageInput).toContain('t("agentModeUnavailable")');
+    expect(messageInput).toContain("agentSearchRequiresExternalProvider");
+    expect(messageInput).toContain('searchCompatibility.mode !== "external"');
+    expect(messageInput).toContain("searchToggleTooltip");
+    expect(messageInput).toContain("searchToggleAriaLabel");
+    expect(messageInput).toContain('t("agentSearchRequiresExternalProvider")');
     expect(messageInput).toContain("DropdownMenuRadioGroup");
     expect(messageInput).toContain('t("reasoningModeAuto")');
     expect(messageInput).toContain('t("reasoningModeHigh")');
@@ -115,6 +164,9 @@ describe("MessageInput composition", () => {
       messageInput.indexOf("{/* Search Button */}"),
     );
     expect(messageInput.indexOf("{/* Search Button */}")).toBeLessThan(
+      messageInput.indexOf("{/* Agent Mode Button */}"),
+    );
+    expect(messageInput.indexOf("{/* Agent Mode Button */}")).toBeLessThan(
       messageInput.indexOf("{/* Model Selector */}"),
     );
     expect(messageInput.indexOf("{/* Model Selector */}")).toBeLessThan(

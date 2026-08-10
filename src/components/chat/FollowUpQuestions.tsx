@@ -4,11 +4,13 @@ import { useTranslations } from "next-intl";
 interface FollowUpQuestionsProps {
   questions: string[];
   onClick: (question: string) => void;
+  disabled?: boolean;
 }
 
 const FollowUpQuestions: React.FC<FollowUpQuestionsProps> = ({
   questions,
   onClick,
+  disabled = false,
 }) => {
   const t = useTranslations("FollowUp");
   const headingId = useId();
@@ -37,7 +39,8 @@ const FollowUpQuestions: React.FC<FollowUpQuestionsProps> = ({
                 type="button"
                 aria-label={t("askAria", { question })}
                 onClick={() => onClick(question)}
-                className="w-full rounded-md px-2 py-1 text-left text-sm leading-relaxed text-gray-400 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:text-muted-foreground/70 dark:hover:text-foreground dark:focus-visible:ring-blue-400/60 dark:focus-visible:ring-offset-background md:py-1.5"
+                disabled={disabled}
+                className="w-full rounded-md px-2 py-1 text-left text-sm leading-relaxed text-gray-400 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-not-allowed disabled:opacity-50 dark:text-muted-foreground/70 dark:hover:text-foreground dark:focus-visible:ring-blue-400/60 dark:focus-visible:ring-offset-background md:py-1.5"
               >
                 <span className="block min-w-0 break-words">{question}</span>
               </button>

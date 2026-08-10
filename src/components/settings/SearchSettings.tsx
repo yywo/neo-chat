@@ -32,6 +32,7 @@ const SearchSettings = () => {
     setSearchProvider,
     updateSearchConfig,
     setSearchResultsLimit,
+    setSearchTimeRange,
   } = useSettingsStore();
   const { providerId: selectedProviderId } = parseModelString(selectedModel);
   const selectedProvider = selectedProviderId
@@ -208,6 +209,34 @@ const SearchSettings = () => {
           <span>10</span>
         </div>
       </div>
+
+      {search.provider === "firecrawl" ? (
+        <div className="space-y-2 pt-4 border-t border-gray-100 dark:border-border">
+          <label
+            htmlFor="search-time-range"
+            className="block text-sm font-medium text-gray-700 dark:text-foreground/85"
+          >
+            {t("timeRange")}
+          </label>
+          <select
+            id="search-time-range"
+            value={search.timeRange}
+            onChange={(event) =>
+              setSearchTimeRange(event.target.value as typeof search.timeRange)
+            }
+            className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none transition-colors focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:border-border dark:bg-background dark:text-foreground"
+          >
+            <option value="any">{t("timeRangeAny")}</option>
+            <option value="day">{t("timeRangeDay")}</option>
+            <option value="week">{t("timeRangeWeek")}</option>
+            <option value="month">{t("timeRangeMonth")}</option>
+            <option value="year">{t("timeRangeYear")}</option>
+          </select>
+          <p className="text-xs leading-5 text-muted-foreground">
+            {t("timeRangeHint")}
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 };

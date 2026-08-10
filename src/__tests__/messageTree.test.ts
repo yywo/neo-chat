@@ -7,9 +7,11 @@ import {
   getActiveMessagePath,
   getAllMessagesFromTree,
   getMessageBranchInfo,
+  getMessageBranchOptions,
   normalizeSessionMessageTree,
   removeActivePathAfter,
   removeMessageFromTree,
+  selectMessageBranch,
   switchMessageBranch,
 } from "../lib/chat/messageTree";
 
@@ -108,8 +110,17 @@ describe("message tree utilities", () => {
       index: 1,
       count: 2,
     });
+    expect(
+      getMessageBranchOptions(tree, "m1b").map((option) => ({
+        id: option.id,
+        active: option.active,
+      })),
+    ).toEqual([
+      { id: "m1", active: false },
+      { id: "m1b", active: true },
+    ]);
 
-    tree = switchMessageBranch(tree, "m1b", "prev");
+    tree = selectMessageBranch(tree, "m1b", "m1");
 
     expect(getActiveMessagePath(tree).map((message) => message.id)).toEqual([
       "u1",

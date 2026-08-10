@@ -37,6 +37,11 @@
   "tokenCount": "{count} トークン",
   "previousVersion": "前のバージョン",
   "nextVersion": "次のバージョン",
+  "openBranchNavigator": "分岐ナビゲーターを開く",
+  "branchNavigatorTitle": "会話の分岐",
+  "branchRoleUser": "あなた",
+  "branchRoleAssistant": "アシスタント",
+  "branchEmptyContent": "テキスト内容なし",
   "retract": "取り消し（編集）",
   "stop": "停止",
   "readAloud": "読み上げ",
@@ -64,5 +69,13 @@
   "more": "もっと見る",
   "skillAppliedTooltip": "{title} スキルを適用済み（{mode}）",
   "skillModeManual": "手動",
-  "skillModeAuto": "自動"
+  "skillModeAuto": "自動",
+  "generationInterrupted": "生成が中断されました",
+  "partialOutputPreserved": "途中までの回答は保存されています。接続後に続行できます。",
+  "continuationBlockedByTools": "ツールを使用した回答は安全に続行できません。新しい分岐として再生成してください。",
+  "continueGeneration": "生成を続ける",
+  "reply": "返信",
+  "openReplySource": "返信元のメッセージを開く",
+  "replySourceUnavailable": "元のメッセージを利用できません",
+  "regenerateWithModel": "モデルを指定して再生成"
 }

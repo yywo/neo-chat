@@ -37,6 +37,11 @@
   "tokenCount": "{count} tokens",
   "previousVersion": "Previous Version",
   "nextVersion": "Next Version",
+  "openBranchNavigator": "Open branch navigator",
+  "branchNavigatorTitle": "Conversation branches",
+  "branchRoleUser": "You",
+  "branchRoleAssistant": "Assistant",
+  "branchEmptyContent": "No text content",
   "retract": "Retract (Edit)",
   "stop": "Stop",
   "readAloud": "Read Aloud",
@@ -64,5 +69,13 @@
   "more": "More",
   "skillAppliedTooltip": "{title} skill applied ({mode})",
   "skillModeManual": "manual",
-  "skillModeAuto": "auto"
+  "skillModeAuto": "auto",
+  "generationInterrupted": "Generation interrupted",
+  "partialOutputPreserved": "The partial response was saved. You can continue when connected.",
+  "continuationBlockedByTools": "This response used tools and cannot be continued safely. Regenerate it as a new branch instead.",
+  "continueGeneration": "Continue",
+  "reply": "Reply",
+  "openReplySource": "Open replied-to message",
+  "replySourceUnavailable": "Original message unavailable",
+  "regenerateWithModel": "Regenerate with model"
 }

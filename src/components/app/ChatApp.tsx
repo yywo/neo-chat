@@ -11,8 +11,19 @@ import { v7 as uuidv7 } from "uuid";
 
 import ChatAppShell from "@/components/app/ChatAppShell";
 import type { MessageInputRef } from "@/components/chat/MessageInput";
-import type { ModelInfo } from "@/services/api/chatService";
-import { resolveSkillsForMessage } from "@/services/api/skillService";
+import SkillParameterDialog, {
+  type ComposerSkillParameterValues,
+  type SkillParameterRequest,
+  type SkillParameterSubmission,
+} from "@/components/skill/SkillParameterDialog";
+import type {
+  ModelInfo,
+  StreamChatResponseOptions,
+} from "@/services/api/chatService";
+import {
+  resolveRecordedSkillInvocations,
+  resolveSkillsForMessage,
+} from "@/services/api/skillService";
 import {
   buildProviderRuntimeConfig,
   fetchWithByokRetry,
@@ -20,10 +31,12 @@ import {
 import { getAgentDetail } from "@/services/api/agentService";
 import {
   Message,
+  MessageReplyReference,
   Attachment,
   LobeAgent,
   SessionMessageTree,
   ToolCall,
+  AppliedSkillInvocation,
 } from "@/types";
 import { useChatStore } from "@/store/core/chatStore";
 import { useMemoryStore } from "@/store/core/memoryStore";
@@ -81,12 +94,43 @@ import {
   shouldResolveSelectedModelAfterBootstrap,
   shouldRunSettingsStartupEffects,
 } from "@/lib/app/startupEffects";
-import { buildSearchUpdate } from "@/lib/chat/searchUpdate";
+import { buildSearchUpdate, mergeSources } from "@/lib/chat/searchUpdate";
+import { getSessionDisplayTitle } from "@/lib/chat/sessionTitle";
+import { createCitationSources } from "@/lib/utils/citations";
 import { resolveEffectiveSearchCapability } from "@/lib/settings/searchRag";
+import {
+  getImageCompressionConfig,
+  prepareConversationImageAttachments,
+} from "@/lib/utils/imageCompression";
+import {
+  buildReplyPromptContext,
+  createStreamCheckpointController,
+  hasUnsafeContinuationToolState,
+  recoverPersistedGeneration,
+  runWithPreOutputRetry,
+  trimContinuationOverlap,
+} from "@/lib/chat/streamResilience";
+import {
+  createStreamRenderScheduler,
+  type StreamRenderScheduler,
+} from "@/lib/chat/streamRenderScheduler";
+import { getSyncDeviceId } from "@/lib/sync/deviceIdentity";
+import {
+  getMissingSkillParameters,
+  resolveSkillBundle,
+  resolveSkillParameterValues,
+} from "@/lib/skills";
+import { MARKET_LIMITS, RAG_LIMITS } from "@/config/limits";
 
 const logChatAppError = logDevError;
 const EMPTY_MESSAGES: Message[] = [];
 const loadChatService = () => import("@/services/api/chatService");
+
+interface StreamRenderSnapshot {
+  content: string;
+  reasoning?: string;
+  outputBlocks?: Message["outputBlocks"];
+}
 
 const ChatApp = () => {
   // --- Global Store ---
@@ -118,6 +162,7 @@ const ChatApp = () => {
       addMessageVersion,
       createEditedUserMessageBranch,
       switchMessageVersion,
+      selectMessageVersion,
       deleteMessage,
       deleteMessageAndSubsequent,
       setSuggestedQuestions,
@@ -139,6 +184,8 @@ const ChatApp = () => {
       installedPlugins,
       pluginConfigs,
       installedSkills,
+      skillBundles,
+      activeSkillBundleIds,
       skillAutoSelect,
       setActivePlugins,
       applyServerConfig: applySettingsServerConfig,
@@ -158,6 +205,20 @@ const ChatApp = () => {
 
   // --- Local UI State ---
   const [actionError, setActionError] = useState<string | null>(null);
+  const [generationRecoveryTick, setGenerationRecoveryTick] = useState(0);
+  const [skillParameterDialog, setSkillParameterDialog] = useState<{
+    requests: SkillParameterRequest[];
+    initialValues: SkillParameterSubmission;
+  } | null>(null);
+  const skillParameterDialogResolverRef = useRef<
+    ((values: SkillParameterSubmission | null) => void) | null
+  >(null);
+  const skillParameterValuesRef = useRef<
+    ComposerSkillParameterValues["skillParameterValues"]
+  >({});
+  const skillBundleParameterValuesRef = useRef<
+    ComposerSkillParameterValues["skillBundleParameterValues"]
+  >({});
   const {
     isGenerating,
     beginActiveGeneration,
@@ -241,17 +302,31 @@ const ChatApp = () => {
     customModelMetadata,
   ]);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
-  const isNearMessageBottomRef = useRef(true);
-  const followScrollFrameRef = useRef<number | null>(null);
-  const followedMessageCountRef = useRef(0);
   const messageInputRef = useRef<MessageInputRef>(null);
+  const activeStreamCheckpointRef = useRef<{
+    flush: () => Promise<void>;
+  } | null>(null);
+  const activeStreamRenderRef =
+    useRef<StreamRenderScheduler<StreamRenderSnapshot> | null>(null);
   const actionErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
   const assistantSelectRequestRef = useRef(0);
   const defaultProviderFetchRef = useRef(false);
+  const createMessageStreamRenderer = useCallback(
+    (sessionId: string, messageId: string) =>
+      createStreamRenderScheduler<StreamRenderSnapshot>((snapshot) => {
+        updateMessageContent(
+          sessionId,
+          messageId,
+          snapshot.content,
+          snapshot.reasoning,
+          snapshot.outputBlocks,
+        );
+      }),
+    [updateMessageContent],
+  );
 
   const currentSession = getCurrentSession(); // This is just metadata now
   const messages = activeMessages ?? EMPTY_MESSAGES; // Use activeMessages from store
@@ -615,63 +690,65 @@ const ChatApp = () => {
     selectSession,
   ]);
 
-  const updateIsNearMessageBottom = useCallback(() => {
-    const container = messagesScrollRef.current;
-    if (!container) {
-      isNearMessageBottomRef.current = true;
-      return;
-    }
-
-    const distanceFromBottom =
-      container.scrollHeight - container.scrollTop - container.clientHeight;
-    isNearMessageBottomRef.current = distanceFromBottom < 160;
-  }, []);
-
   useEffect(() => {
+    const flushCheckpoint = () => {
+      activeStreamRenderRef.current?.flush();
+      void activeStreamCheckpointRef.current?.flush();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") flushCheckpoint();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pagehide", flushCheckpoint);
     return () => {
-      if (followScrollFrameRef.current !== null) {
-        cancelAnimationFrame(followScrollFrameRef.current);
-        followScrollFrameRef.current = null;
-      }
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pagehide", flushCheckpoint);
     };
   }, []);
 
-  // Scroll to bottom when the user is already following the live stream.
   useEffect(() => {
-    const isMessageCountChange =
-      messages.length !== followedMessageCountRef.current;
-    followedMessageCountRef.current = messages.length;
-
-    if (
-      welcomeState !== "hidden" ||
-      (!isGenerating && messages.length === 0) ||
-      !isNearMessageBottomRef.current
-    ) {
-      return;
-    }
-
-    if (isMessageCountChange) {
-      const reduceMotion =
-        typeof window !== "undefined" &&
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      messagesEndRef.current?.scrollIntoView({
-        behavior: reduceMotion ? "auto" : "smooth",
-        block: "end",
-      });
-      return;
-    }
-
-    // Streaming growth of an existing message: pin to the bottom instantly and
-    // at most once per frame. Restarting a smooth-scroll animation on every
-    // chunk makes the viewport stutter and fight the user's own scrolling.
-    if (followScrollFrameRef.current !== null) return;
-    followScrollFrameRef.current = requestAnimationFrame(() => {
-      followScrollFrameRef.current = null;
-      const container = messagesScrollRef.current;
-      if (!container || !isNearMessageBottomRef.current) return;
-      container.scrollTop = container.scrollHeight - container.clientHeight;
+    if (!currentSessionId) return;
+    const ownerDeviceId = getSyncDeviceId();
+    const now = Date.now();
+    let nextForeignStaleDelay: number | null = null;
+    activeMessages.forEach((message) => {
+      const normalized = recoverPersistedGeneration(
+        message,
+        ownerDeviceId,
+        isGenerating,
+        now,
+      );
+      if (normalized !== message) {
+        updateMessage(currentSessionId, message.id, {
+          generation: normalized.generation,
+        });
+      } else if (
+        message.generation?.status === "streaming" &&
+        message.generation.ownerDeviceId !== ownerDeviceId
+      ) {
+        const delay =
+          message.generation.checkpointAt + 2 * 60 * 1000 - now + 25;
+        if (delay > 0) {
+          nextForeignStaleDelay =
+            nextForeignStaleDelay === null
+              ? delay
+              : Math.min(nextForeignStaleDelay, delay);
+        }
+      }
     });
-  }, [messages, isGenerating, welcomeState]);
+    if (nextForeignStaleDelay === null) return;
+    const timer = window.setTimeout(
+      () => setGenerationRecoveryTick((value) => value + 1),
+      nextForeignStaleDelay,
+    );
+    return () => window.clearTimeout(timer);
+  }, [
+    activeMessages,
+    currentSessionId,
+    generationRecoveryTick,
+    isGenerating,
+    updateMessage,
+  ]);
 
   // --- Handlers ---
 
@@ -707,7 +784,11 @@ const ChatApp = () => {
   const stopActiveGenerationWithFeedback = async () => {
     abortBackgroundPostProcessing();
     try {
+      const renderer = activeStreamRenderRef.current;
+      const checkpoint = activeStreamCheckpointRef.current;
+      renderer?.flush();
       await stopActiveGeneration();
+      await checkpoint?.flush();
     } catch (error) {
       logChatAppError("Failed to persist stopped generation", error);
       showActionError(t("errSaveStopped"));
@@ -720,8 +801,9 @@ const ChatApp = () => {
 
   const getEffectiveContextForSession = (
     session?: typeof currentSession | null,
+    requestModel = selectedModel,
   ) => {
-    const { providerId } = parseModelString(selectedModel);
+    const { providerId } = parseModelString(requestModel);
     const provider = providerId
       ? providers.find((item) => item.id === providerId)
       : providers.find((item) => item.enabled);
@@ -735,7 +817,7 @@ const ChatApp = () => {
       systemPrompt: system.systemPrompt,
       personality: system.personality,
       enableHtmlVisualPrompt: system.enableHtmlVisualPrompt,
-      selectedModel,
+      selectedModel: requestModel,
       provider,
       modelMetadata,
       customModelMetadata,
@@ -752,22 +834,180 @@ const ChatApp = () => {
     });
   };
 
+  const requestSkillParameterValues = useCallback(
+    (
+      requests: SkillParameterRequest[],
+      initialValues: SkillParameterSubmission,
+    ) =>
+      new Promise<SkillParameterSubmission | null>((resolve) => {
+        skillParameterDialogResolverRef.current?.(null);
+        skillParameterDialogResolverRef.current = resolve;
+        setSkillParameterDialog({ requests, initialValues });
+      }),
+    [],
+  );
+
+  const closeSkillParameterDialog = useCallback(
+    (values: SkillParameterSubmission | null) => {
+      const resolve = skillParameterDialogResolverRef.current;
+      skillParameterDialogResolverRef.current = null;
+      setSkillParameterDialog(null);
+      resolve?.(values);
+    },
+    [],
+  );
+
+  useEffect(
+    () => () => {
+      skillParameterDialogResolverRef.current?.(null);
+      skillParameterDialogResolverRef.current = null;
+    },
+    [],
+  );
+
+  const prepareComposerSkillParameters = async (
+    session?: typeof currentSession | null,
+    requestModel = selectedModel,
+  ): Promise<ComposerSkillParameterValues | null> => {
+    const effectiveContext = getEffectiveContextForSession(
+      session,
+      requestModel,
+    );
+    const skillsById = new Map(
+      installedSkills.map((skill) => [skill.id, skill]),
+    );
+    const activeManualSkills =
+      skillAutoSelect && !effectiveContext.agentModeEnabled
+        ? []
+        : effectiveContext.activeSkillIds
+            .map((id) => skillsById.get(id))
+            .filter((skill): skill is (typeof installedSkills)[number] =>
+              Boolean(skill),
+            );
+    const bundlesById = new Map(
+      skillBundles.map((bundle) => [bundle.id, bundle]),
+    );
+    const activeBundles = activeSkillBundleIds
+      .map((id) => bundlesById.get(id))
+      .filter((bundle): bundle is (typeof skillBundles)[number] =>
+        Boolean(bundle),
+      );
+    const requests: SkillParameterRequest[] = [];
+
+    for (const skill of activeManualSkills) {
+      if (
+        getMissingSkillParameters(
+          skill,
+          skillParameterValuesRef.current[skill.id],
+        ).length > 0
+      ) {
+        requests.push({
+          key: `skill:${skill.id}`,
+          title: skill.title,
+          description: skill.description,
+          parameters: skill.parameters || [],
+        });
+      }
+    }
+    for (const bundle of activeBundles) {
+      if (
+        getMissingSkillParameters(
+          { id: bundle.id, parameters: bundle.parameters },
+          skillBundleParameterValuesRef.current[bundle.id],
+        ).length > 0
+      ) {
+        requests.push({
+          key: `bundle:${bundle.id}`,
+          title: bundle.title,
+          description: bundle.description,
+          parameters: bundle.parameters,
+        });
+      }
+    }
+
+    if (requests.length > 0) {
+      const initialValues = Object.fromEntries(
+        requests.map((request) => {
+          const [kind, id] = request.key.split(":", 2);
+          return [
+            request.key,
+            kind === "bundle"
+              ? skillBundleParameterValuesRef.current[id] || {}
+              : skillParameterValuesRef.current[id] || {},
+          ];
+        }),
+      );
+      const submission = await requestSkillParameterValues(
+        requests,
+        initialValues,
+      );
+      if (!submission) return null;
+      for (const [key, values] of Object.entries(submission)) {
+        const [kind, id] = key.split(":", 2);
+        if (!id) continue;
+        if (kind === "bundle") {
+          skillBundleParameterValuesRef.current[id] = values;
+        } else if (kind === "skill") {
+          skillParameterValuesRef.current[id] = values;
+        }
+      }
+    }
+
+    try {
+      activeManualSkills.forEach((skill) =>
+        resolveSkillParameterValues(
+          skill,
+          skillParameterValuesRef.current[skill.id],
+        ),
+      );
+      activeBundles.forEach((bundle) =>
+        resolveSkillBundle({
+          bundle,
+          skills: installedSkills,
+          values: skillBundleParameterValuesRef.current[bundle.id],
+        }),
+      );
+    } catch (error) {
+      logChatAppError("Skill parameter validation failed:", error);
+      showActionError(t("errSkillParameters"));
+      return null;
+    }
+
+    return {
+      skillParameterValues: { ...skillParameterValuesRef.current },
+      skillBundleParameterValues: {
+        ...skillBundleParameterValuesRef.current,
+      },
+    };
+  };
+
   const processPromptForModel = async (
     session: typeof currentSession | null | undefined,
     text: string,
     attachments: Attachment[],
     signal: AbortSignal,
     existingMemoryContext?: Message["memoryContext"],
+    replyTo?: MessageReplyReference,
+    requestModel = selectedModel,
   ) => {
-    const effectiveContext = getEffectiveContextForSession(session);
+    const effectiveContext = getEffectiveContextForSession(
+      session,
+      requestModel,
+    );
+    const preparedAttachments = await prepareConversationImageAttachments(
+      attachments,
+      getImageCompressionConfig(system),
+      { signal },
+    );
     const processedData = await processMessageForSending({
       text,
-      attachments,
-      selectedModel,
+      attachments: preparedAttachments,
+      selectedModel: requestModel,
       modelMetadata,
       customModelMetadata,
       ragConfig: rag,
       ragEnabled: chatConfig.useRAG !== false,
+      deferKnowledgeRetrieval: effectiveContext.agentModeEnabled,
       knowledgeCollections,
       workspaceKnowledgeCollectionIds:
         effectiveContext.workspaceKnowledgeCollectionIds,
@@ -802,24 +1042,85 @@ const ChatApp = () => {
           }
         : undefined;
 
+    const replyContext = buildReplyPromptContext(replyTo);
+    const promptWithReply = replyContext
+      ? appendContextToChatInput(replyContext, processedData.finalText, {
+          separator: "\n\n",
+        })
+      : processedData.finalText;
+
     return {
       ...processedData,
-      userMessage: memoryContext
-        ? { ...processedData.userMessage, memoryContext }
-        : processedData.userMessage,
+      userMessage: {
+        ...processedData.userMessage,
+        ...(memoryContext ? { memoryContext } : {}),
+        ...(replyTo ? { replyTo } : {}),
+      },
       finalText: directMemoryContext.text
-        ? appendContextToChatInput(
-            processedData.finalText,
-            directMemoryContext.text,
-            {
-              separator: "\n\n",
-            },
-          )
-        : processedData.finalText,
+        ? appendContextToChatInput(promptWithReply, directMemoryContext.text, {
+            separator: "\n\n",
+          })
+        : promptWithReply,
       effectiveContext,
       injectedMemoryIds: directMemoryContext.injectedMemoryIds,
     };
   };
+
+  const createAgentToolStreamOptions = ({
+    sessionId,
+    modelMessageId,
+    knowledgeScope,
+    isActive,
+  }: {
+    sessionId: string;
+    modelMessageId: string;
+    knowledgeScope: Attachment[];
+    isActive: () => boolean;
+  }): StreamChatResponseOptions => ({
+    knowledgeScope: {
+      attachments: knowledgeScope.map((attachment) => ({ ...attachment })),
+      collections: knowledgeCollections,
+      ragConfig: { ...rag },
+    },
+    onKnowledgeSources: (sources, ragError) => {
+      if (!isActive()) return;
+      const current = useChatStore
+        .getState()
+        .activeMessages.find((message) => message.id === modelMessageId);
+      const ragSources = mergeSources([], sources).slice(0, RAG_LIMITS.maxTopK);
+      updateMessage(sessionId, modelMessageId, {
+        ragSources,
+        ragError,
+        citations: createCitationSources({
+          web: current?.searchSources,
+          knowledge: ragSources,
+        }),
+      });
+    },
+    onSkillInvocation: (invocation: AppliedSkillInvocation) => {
+      if (!isActive()) return;
+      const current = useChatStore
+        .getState()
+        .activeMessages.find((message) => message.id === modelMessageId);
+      const existing = current?.skillInvocations || [];
+      if (existing.some((item) => item.id === invocation.id)) return;
+      if (existing.length >= MARKET_LIMITS.maxActiveSkills) return;
+      const nextOrder =
+        existing.reduce(
+          (maximum, item, index) => Math.max(maximum, item.order ?? index),
+          -1,
+        ) + 1;
+      updateMessage(sessionId, modelMessageId, {
+        skillInvocations: [
+          ...existing,
+          {
+            ...invocation,
+            order: nextOrder,
+          },
+        ],
+      });
+    },
+  });
 
   const commitInjectedMemoryContext = (
     sessionId: string,
@@ -839,8 +1140,17 @@ const ChatApp = () => {
     });
   };
 
-  const handleSendMessage = async (text: string, attachments: Attachment[]) => {
+  const handleSendMessage = async (
+    text: string,
+    attachments: Attachment[],
+    replyTo?: MessageReplyReference,
+    skillParameters?: ComposerSkillParameterValues,
+  ) => {
     const chatState = useChatStore.getState();
+    if (!navigator.onLine) {
+      showActionError(t("offlineReadOnly"));
+      return;
+    }
     if (
       (!text.trim() && attachments.length === 0) ||
       isGenerating ||
@@ -876,6 +1186,11 @@ const ChatApp = () => {
       shouldAutoRename = true;
     }
 
+    const resolvedSkillParameters =
+      skillParameters ||
+      (await prepareComposerSkillParameters(sessionForCheck, selectedModel));
+    if (!resolvedSkillParameters) return;
+
     abortBackgroundPostProcessing();
     const generation = beginActiveGeneration();
 
@@ -887,6 +1202,13 @@ const ChatApp = () => {
     let botMsgId: string | null = null;
     let userMessageAdded = false;
     let startTime = Date.now();
+    let receivedVisibleOutput = false;
+    let receivedToolActivity = false;
+    let streamCheckpoint: ReturnType<
+      typeof createStreamCheckpointController
+    > | null = null;
+    let streamRenderer: StreamRenderScheduler<StreamRenderSnapshot> | null =
+      null;
 
     try {
       // Process message and attachments
@@ -899,6 +1221,9 @@ const ChatApp = () => {
         text,
         attachments,
         generation.controller.signal,
+        undefined,
+        replyTo,
+        selectedModel,
       );
 
       const {
@@ -931,6 +1256,14 @@ const ChatApp = () => {
       const currentBotMsgId = botMsg.id;
       botMsgId = currentBotMsgId;
       startTime = botMsg.timestamp;
+      botMsg.generation = {
+        status: "streaming",
+        requestId: uuidv7(),
+        ownerDeviceId: getSyncDeviceId(),
+        model: selectedModel,
+        attempt: 0,
+        checkpointAt: startTime,
+      };
 
       await addMessage(targetSessionId, botMsg);
       if (!isGenerationRunActive(generation)) return;
@@ -972,10 +1305,22 @@ const ChatApp = () => {
         locale,
         installedSkills,
         activeSkillIds: effectiveContext.activeSkillIds,
-        autoSelect: skillAutoSelect,
+        skillBundles,
+        activeSkillBundleIds,
+        skillParameterValues: resolvedSkillParameters.skillParameterValues,
+        skillBundleParameterValues:
+          resolvedSkillParameters.skillBundleParameterValues,
+        autoSelect: skillAutoSelect && !effectiveContext.agentModeEnabled,
         signal: generation.controller.signal,
       });
       if (!isGenerationRunActive(generation)) return;
+      if (skillResolution.skippedSkillIds.length > 0) {
+        showActionError(
+          t("skillsSkipped", {
+            count: skillResolution.skippedSkillIds.length,
+          }),
+        );
+      }
 
       if (skillResolution.invocations.length > 0) {
         updateMessage(targetSessionId, currentBotMsgId, {
@@ -984,94 +1329,179 @@ const ChatApp = () => {
       }
 
       let latestStreamText = "";
-      let latestStreamReasoning = "";
+      let latestStreamReasoning: string | undefined;
+      let latestStreamOutputBlocks: Message["outputBlocks"];
 
-      await streamChatResponse(
+      streamRenderer = createMessageStreamRenderer(
         targetSessionId,
-        selectedModel,
-        historyForLLM,
-        finalText, // Injected context included here
-        finalAttachments, // Injected files included here (excluding original KB refs)
-        effectiveConfig,
-        (streamText, streamReasoning, outputBlocks) => {
-          if (!isGenerationRunActive(generation)) return;
-          latestStreamText = streamText;
-          if (streamReasoning !== undefined) {
-            latestStreamReasoning = streamReasoning;
-          }
-          // Update active state in memory only
-          updateMessageContent(
-            targetSessionId!,
-            currentBotMsgId,
-            streamText,
-            streamReasoning,
-            outputBlocks,
-          );
-        },
-        effectiveContext.systemInstruction,
-        (isSearching, results) => {
-          if (!isGenerationRunActive(generation)) return;
-          const currentMessage = useChatStore
-            .getState()
-            .activeMessages.find((message) => message.id === currentBotMsgId);
-          const updates = buildSearchUpdate(
-            currentMessage,
-            isSearching,
-            results,
-          );
-          updateMessage(targetSessionId!, currentBotMsgId, updates);
-        },
-        (toolCalls) => {
-          if (!isGenerationRunActive(generation)) return;
-          updateMessage(targetSessionId!, currentBotMsgId, { toolCalls });
-        },
-        (images) => {
-          if (!isGenerationRunActive(generation)) return;
-          const currentActiveMsgs = useChatStore.getState().activeMessages;
-          const msg = currentActiveMsgs.find((m) => m.id === currentBotMsgId);
-          const currentAttachments = msg?.attachments || [];
-
-          updateMessage(targetSessionId!, currentBotMsgId, {
-            attachments: [...currentAttachments, ...images],
-          });
-        },
-        (usage) => {
-          if (!isGenerationRunActive(generation)) return;
-          const currentMessages = useChatStore.getState().activeMessages;
-          handleTokenUsageUpdate(
-            usage,
-            currentMessages,
-            userMessage.id,
-            currentBotMsgId,
-            targetSessionId!,
-            updateMessage,
-          );
-        },
-        generation.controller.signal,
-        effectiveContext.activePluginIds,
-        skillResolution.context,
-        (outputBlocks) => {
-          if (!isGenerationRunActive(generation)) return;
-          updateMessageContent(
-            targetSessionId!,
-            currentBotMsgId,
-            latestStreamText,
-            latestStreamReasoning || undefined,
-            outputBlocks,
-          );
-        },
-        toolConfirmationController,
+        currentBotMsgId,
       );
+      activeStreamRenderRef.current = streamRenderer;
 
+      streamCheckpoint = createStreamCheckpointController({
+        persist: async () => {
+          streamRenderer?.flush();
+          const message = useChatStore
+            .getState()
+            .activeMessages.find((item) => item.id === currentBotMsgId);
+          if (message?.generation) {
+            updateMessage(targetSessionId!, currentBotMsgId, {
+              generation: {
+                ...message.generation,
+                checkpointAt: Date.now(),
+              },
+            });
+          }
+          await useChatStore.getState().syncActiveSession(targetSessionId!);
+        },
+      });
+      activeStreamCheckpointRef.current = streamCheckpoint;
+
+      await runWithPreOutputRetry({
+        signal: generation.controller.signal,
+        hasVisibleOutput: () => receivedVisibleOutput,
+        hasToolActivity: () => receivedToolActivity,
+        onAttempt: (attempt) => {
+          const message = useChatStore
+            .getState()
+            .activeMessages.find((item) => item.id === currentBotMsgId);
+          if (message?.generation) {
+            updateMessage(targetSessionId!, currentBotMsgId, {
+              generation: { ...message.generation, attempt },
+            });
+          }
+        },
+        run: () =>
+          streamChatResponse(
+            targetSessionId!,
+            selectedModel,
+            historyForLLM,
+            finalText,
+            finalAttachments,
+            effectiveConfig,
+            (streamText, streamReasoning, outputBlocks) => {
+              if (!isGenerationRunActive(generation)) return;
+              latestStreamText = streamText;
+              if (streamReasoning !== undefined) {
+                latestStreamReasoning = streamReasoning;
+              }
+              if (outputBlocks !== undefined) {
+                latestStreamOutputBlocks = outputBlocks;
+              }
+              receivedVisibleOutput =
+                receivedVisibleOutput ||
+                Boolean(streamText || streamReasoning || outputBlocks?.length);
+              streamRenderer?.schedule({
+                content: latestStreamText,
+                reasoning: latestStreamReasoning,
+                outputBlocks: latestStreamOutputBlocks,
+              });
+              streamCheckpoint?.record(
+                latestStreamText.length + (latestStreamReasoning?.length || 0),
+              );
+            },
+            effectiveContext.systemInstruction,
+            (isSearching, results) => {
+              if (!isGenerationRunActive(generation)) return;
+              streamRenderer?.flush();
+              receivedVisibleOutput = receivedVisibleOutput || isSearching;
+              const currentMessage = useChatStore
+                .getState()
+                .activeMessages.find(
+                  (message) => message.id === currentBotMsgId,
+                );
+              const updates = buildSearchUpdate(
+                currentMessage,
+                isSearching,
+                results,
+                {
+                  replaceResults: effectiveContext.agentModeEnabled,
+                },
+              );
+              updateMessage(targetSessionId!, currentBotMsgId, updates);
+            },
+            (toolCalls) => {
+              if (!isGenerationRunActive(generation)) return;
+              streamRenderer?.flush();
+              receivedToolActivity =
+                receivedToolActivity || toolCalls.length > 0;
+              updateMessage(targetSessionId!, currentBotMsgId, { toolCalls });
+            },
+            (images) => {
+              if (!isGenerationRunActive(generation)) return;
+              streamRenderer?.flush();
+              receivedVisibleOutput =
+                receivedVisibleOutput || images.length > 0;
+              const currentActiveMsgs = useChatStore.getState().activeMessages;
+              const msg = currentActiveMsgs.find(
+                (m) => m.id === currentBotMsgId,
+              );
+              const currentAttachments = msg?.attachments || [];
+
+              updateMessage(targetSessionId!, currentBotMsgId, {
+                attachments: [...currentAttachments, ...images],
+              });
+            },
+            (usage) => {
+              if (!isGenerationRunActive(generation)) return;
+              const currentMessages = useChatStore.getState().activeMessages;
+              handleTokenUsageUpdate(
+                usage,
+                currentMessages,
+                userMessage.id,
+                currentBotMsgId,
+                targetSessionId!,
+                updateMessage,
+              );
+            },
+            generation.controller.signal,
+            effectiveContext.activePluginIds,
+            skillResolution.context,
+            (outputBlocks) => {
+              if (!isGenerationRunActive(generation)) return;
+              streamRenderer?.flush();
+              latestStreamOutputBlocks = outputBlocks;
+              receivedVisibleOutput =
+                receivedVisibleOutput || outputBlocks.length > 0;
+              updateMessageContent(
+                targetSessionId!,
+                currentBotMsgId,
+                latestStreamText,
+                latestStreamReasoning,
+                outputBlocks,
+              );
+            },
+            toolConfirmationController,
+            createAgentToolStreamOptions({
+              sessionId: targetSessionId!,
+              modelMessageId: currentBotMsgId,
+              knowledgeScope: processedData.knowledgeScope,
+              isActive: () => isGenerationRunActive(generation),
+            }),
+          ),
+      });
+
+      streamRenderer.flush();
       if (!isGenerationRunActive(generation)) return;
       const endTime = Date.now();
+      const completedGeneration = useChatStore
+        .getState()
+        .activeMessages.find(
+          (message) => message.id === currentBotMsgId,
+        )?.generation;
       updateMessage(targetSessionId, currentBotMsgId, {
+        generation: {
+          ...(completedGeneration || botMsg.generation!),
+          status: "completed",
+          checkpointAt: endTime,
+        },
         timing: {
           startTime,
           endTime,
           duration: endTime - startTime,
         },
       });
+      await streamCheckpoint.flush();
 
       // --- Post-Generation ---
       // Force sync active messages to storage at end of generation
@@ -1209,6 +1639,7 @@ const ChatApp = () => {
           });
       }
     } catch (error: any) {
+      streamRenderer?.flush();
       if (error.name === "AbortError" || generation.controller.signal.aborted) {
         return;
       } else {
@@ -1228,17 +1659,35 @@ const ChatApp = () => {
             content: text,
             timestamp: Date.now(),
             attachments,
+            replyTo,
           };
           await addMessage(targetSessionId, fallbackUserMessage);
           userMessageAdded = true;
         }
 
         if (botMsgId) {
+          const partialMessage = useChatStore
+            .getState()
+            .activeMessages.find((message) => message.id === botMsgId);
+          const hasPartialOutput = Boolean(
+            partialMessage?.content ||
+            partialMessage?.reasoning ||
+            partialMessage?.outputBlocks?.length,
+          );
           updateMessage(targetSessionId, botMsgId, {
-            generationError: {
-              message: errorMessage,
-              recoverable: true,
-            },
+            generation: partialMessage?.generation
+              ? {
+                  ...partialMessage.generation,
+                  status: "interrupted",
+                  checkpointAt: Date.now(),
+                }
+              : undefined,
+            generationError: hasPartialOutput
+              ? undefined
+              : {
+                  message: errorMessage,
+                  recoverable: true,
+                },
             timing: {
               startTime,
               endTime: Date.now(),
@@ -1260,9 +1709,17 @@ const ChatApp = () => {
           await addMessage(targetSessionId, errorBotMsg);
         }
 
+        await streamCheckpoint?.flush();
         await syncActiveSession(targetSessionId); // Sync error message too
       }
     } finally {
+      streamRenderer?.cancel();
+      if (activeStreamRenderRef.current === streamRenderer) {
+        activeStreamRenderRef.current = null;
+      }
+      if (activeStreamCheckpointRef.current === streamCheckpoint) {
+        activeStreamCheckpointRef.current = null;
+      }
       finishActiveGeneration(generation);
     }
   };
@@ -1272,11 +1729,17 @@ const ChatApp = () => {
     {
       errorMessage,
       logPrefix,
+      model,
     }: {
       errorMessage: string;
       logPrefix: string;
+      model?: string;
     },
   ) => {
+    if (!navigator.onLine) {
+      showActionError(t("offlineReadOnly"));
+      return;
+    }
     if (
       isGenerating ||
       !currentSessionId ||
@@ -1302,11 +1765,33 @@ const ChatApp = () => {
 
     const promptText = lastUserMsg.content;
     const promptAttachments = lastUserMsg.attachments || [];
+    const generationModel = model || selectedModel;
 
     const currentModelInfo = availableModels.find(
-      (m) => m.name === selectedModel,
+      (m) => m.name === generationModel,
     );
-    const modelDisplayName = currentModelInfo?.displayName || selectedModel;
+    if (!currentModelInfo) {
+      showActionError(t("errModelUnavailable"));
+      return;
+    }
+    const modelDisplayName = currentModelInfo.displayName;
+
+    let recordedSkillResolution: ReturnType<
+      typeof resolveRecordedSkillInvocations
+    > | null = null;
+    const recordedInvocations = sessionMessages[msgIndex].skillInvocations;
+    if (recordedInvocations?.length) {
+      try {
+        recordedSkillResolution = resolveRecordedSkillInvocations({
+          invocations: recordedInvocations,
+          installedSkills,
+        });
+      } catch (error) {
+        logChatAppError(`${logPrefix}: recorded skill unavailable.`, error);
+        showActionError(t("errRecordedSkillChanged"));
+        return;
+      }
+    }
 
     const branchMessageId = addMessageVersion(
       currentSessionId,
@@ -1320,6 +1805,24 @@ const ChatApp = () => {
     abortBackgroundPostProcessing();
     const generation = beginActiveGeneration();
     const startTime = Date.now();
+    const requestId = uuidv7();
+    let receivedVisibleOutput = false;
+    let receivedToolActivity = false;
+    let streamCheckpoint: ReturnType<
+      typeof createStreamCheckpointController
+    > | null = null;
+    let streamRenderer: StreamRenderScheduler<StreamRenderSnapshot> | null =
+      null;
+    updateMessage(currentSessionId, branchMessageId, {
+      generation: {
+        status: "streaming",
+        requestId,
+        ownerDeviceId: getSyncDeviceId(),
+        model: generationModel,
+        attempt: 0,
+        checkpointAt: startTime,
+      },
+    });
 
     try {
       const sessionMeta = getCurrentSession();
@@ -1329,6 +1832,7 @@ const ChatApp = () => {
         ragSources,
         ragError,
         effectiveContext,
+        knowledgeScope,
         injectedMemoryIds,
       } = await processPromptForModel(
         sessionMeta,
@@ -1336,6 +1840,8 @@ const ChatApp = () => {
         promptAttachments,
         generation.controller.signal,
         lastUserMsg.memoryContext,
+        lastUserMsg.replyTo,
+        generationModel,
       );
       if (!isGenerationRunActive(generation)) return;
       commitInjectedMemoryContext(
@@ -1343,20 +1849,34 @@ const ChatApp = () => {
         sessionMeta,
         injectedMemoryIds,
       );
-      const skillResolution = await resolveSkillsForMessage({
-        message: promptText,
-        selectedModel,
-        locale,
-        installedSkills,
-        activeSkillIds: effectiveContext.activeSkillIds,
-        autoSelect: skillAutoSelect,
-        signal: generation.controller.signal,
-      });
+      const skillResolution =
+        recordedSkillResolution ||
+        (await resolveSkillsForMessage({
+          message: promptText,
+          selectedModel: generationModel,
+          locale,
+          installedSkills,
+          activeSkillIds: effectiveContext.activeSkillIds,
+          skillBundles,
+          activeSkillBundleIds,
+          skillParameterValues: skillParameterValuesRef.current,
+          skillBundleParameterValues: skillBundleParameterValuesRef.current,
+          autoSelect: skillAutoSelect && !effectiveContext.agentModeEnabled,
+          signal: generation.controller.signal,
+        }));
       if (!isGenerationRunActive(generation)) return;
+      if (skillResolution.skippedSkillIds.length > 0) {
+        showActionError(
+          t("skillsSkipped", {
+            count: skillResolution.skippedSkillIds.length,
+          }),
+        );
+      }
       if (ragSources.length > 0 || ragError) {
         updateMessage(currentSessionId, branchMessageId, {
           ragSources,
           ragError,
+          citations: createCitationSources({ knowledge: ragSources }),
         });
       }
       if (skillResolution.invocations.length > 0) {
@@ -1370,103 +1890,194 @@ const ChatApp = () => {
       const historyForApi = await prepareHistoryForLLM(
         historyBeforeUser,
         sessionMeta?.compression,
-        selectedModel,
+        generationModel,
       );
       if (!isGenerationRunActive(generation)) return;
 
       let latestStreamText = "";
-      let latestStreamReasoning = "";
+      let latestStreamReasoning: string | undefined;
+      let latestStreamOutputBlocks: Message["outputBlocks"];
 
-      await streamChatResponse(
+      streamRenderer = createMessageStreamRenderer(
         currentSessionId,
-        selectedModel,
-        historyForApi, // Don't include lastUserMsg here, it's sent as newMessage
-        finalText,
-        finalAttachments,
-        resolveEffectiveChatRequestConfig({
-          chatConfig,
-          selectedModel,
-          modelMetadata,
-          customModelMetadata,
-          searchCompatibility: effectiveContext.searchCompatibility,
-        }),
-        (streamText, streamReasoning, outputBlocks) => {
-          if (!isGenerationRunActive(generation)) return;
-          latestStreamText = streamText;
-          if (streamReasoning !== undefined) {
-            latestStreamReasoning = streamReasoning;
-          }
-          updateMessageContent(
-            currentSessionId,
-            branchMessageId,
-            streamText,
-            streamReasoning,
-            outputBlocks,
-          );
-        },
-        effectiveContext.systemInstruction,
-        (isSearching, results) => {
-          if (!isGenerationRunActive(generation)) return;
-          const currentMessage = useChatStore
+        branchMessageId,
+      );
+      activeStreamRenderRef.current = streamRenderer;
+
+      streamCheckpoint = createStreamCheckpointController({
+        persist: async () => {
+          streamRenderer?.flush();
+          const current = useChatStore
             .getState()
             .activeMessages.find((message) => message.id === branchMessageId);
-          const updates = buildSearchUpdate(
-            currentMessage,
-            isSearching,
-            results,
-          );
-          updateMessage(currentSessionId, branchMessageId, updates);
+          if (current?.generation) {
+            updateMessage(currentSessionId, branchMessageId, {
+              generation: {
+                ...current.generation,
+                checkpointAt: Date.now(),
+              },
+            });
+          }
+          await useChatStore.getState().syncActiveSession(currentSessionId);
         },
-        (toolCalls) => {
-          if (!isGenerationRunActive(generation)) return;
-          updateMessage(currentSessionId, branchMessageId, { toolCalls });
-        },
-        (images) => {
-          if (!isGenerationRunActive(generation)) return;
-          const currentActiveMsgs = useChatStore.getState().activeMessages;
-          const msg = currentActiveMsgs.find((m) => m.id === branchMessageId);
-          const currentAttachments = msg?.attachments || [];
-          updateMessage(currentSessionId, branchMessageId, {
-            attachments: [...currentAttachments, ...images],
-          });
-        },
-        (usage) => {
-          if (!isGenerationRunActive(generation)) return;
-          const currentMessages = useChatStore.getState().activeMessages;
-          handleTokenUsageUpdate(
-            usage,
-            currentMessages,
-            lastUserMsg.id,
-            branchMessageId,
-            currentSessionId,
-            updateMessage,
-          );
-        },
-        generation.controller.signal,
-        effectiveContext.activePluginIds,
-        skillResolution.context,
-        (outputBlocks) => {
-          if (!isGenerationRunActive(generation)) return;
-          updateMessageContent(
-            currentSessionId,
-            branchMessageId,
-            latestStreamText,
-            latestStreamReasoning || undefined,
-            outputBlocks,
-          );
-        },
-        toolConfirmationController,
-      );
+      });
+      activeStreamCheckpointRef.current = streamCheckpoint;
 
+      await runWithPreOutputRetry({
+        signal: generation.controller.signal,
+        hasVisibleOutput: () => receivedVisibleOutput,
+        hasToolActivity: () => receivedToolActivity,
+        onAttempt: (attempt) => {
+          const current = useChatStore
+            .getState()
+            .activeMessages.find((message) => message.id === branchMessageId);
+          if (current?.generation) {
+            updateMessage(currentSessionId, branchMessageId, {
+              generation: { ...current.generation, attempt },
+            });
+          }
+        },
+        run: () =>
+          streamChatResponse(
+            currentSessionId,
+            generationModel,
+            historyForApi, // Don't include lastUserMsg here, it's sent as newMessage
+            finalText,
+            finalAttachments,
+            resolveEffectiveChatRequestConfig({
+              chatConfig,
+              selectedModel: generationModel,
+              modelMetadata,
+              customModelMetadata,
+              searchCompatibility: effectiveContext.searchCompatibility,
+            }),
+            (streamText, streamReasoning, outputBlocks) => {
+              if (!isGenerationRunActive(generation)) return;
+              latestStreamText = streamText;
+              if (streamReasoning !== undefined) {
+                latestStreamReasoning = streamReasoning;
+              }
+              if (outputBlocks !== undefined) {
+                latestStreamOutputBlocks = outputBlocks;
+              }
+              receivedVisibleOutput =
+                receivedVisibleOutput ||
+                Boolean(streamText || streamReasoning || outputBlocks?.length);
+              streamRenderer?.schedule({
+                content: latestStreamText,
+                reasoning: latestStreamReasoning,
+                outputBlocks: latestStreamOutputBlocks,
+              });
+              streamCheckpoint?.record(
+                latestStreamText.length + (latestStreamReasoning?.length || 0),
+              );
+            },
+            effectiveContext.systemInstruction,
+            (isSearching, results) => {
+              if (!isGenerationRunActive(generation)) return;
+              streamRenderer?.flush();
+              receivedVisibleOutput = receivedVisibleOutput || isSearching;
+              const currentMessage = useChatStore
+                .getState()
+                .activeMessages.find(
+                  (message) => message.id === branchMessageId,
+                );
+              const updates = buildSearchUpdate(
+                currentMessage,
+                isSearching,
+                results,
+                {
+                  replaceResults: effectiveContext.agentModeEnabled,
+                },
+              );
+              updateMessage(currentSessionId, branchMessageId, updates);
+            },
+            (toolCalls) => {
+              if (!isGenerationRunActive(generation)) return;
+              streamRenderer?.flush();
+              receivedToolActivity =
+                receivedToolActivity || toolCalls.length > 0;
+              updateMessage(currentSessionId, branchMessageId, { toolCalls });
+            },
+            (images) => {
+              if (!isGenerationRunActive(generation)) return;
+              streamRenderer?.flush();
+              receivedVisibleOutput =
+                receivedVisibleOutput || images.length > 0;
+              const currentActiveMsgs = useChatStore.getState().activeMessages;
+              const msg = currentActiveMsgs.find(
+                (m) => m.id === branchMessageId,
+              );
+              const currentAttachments = msg?.attachments || [];
+              updateMessage(currentSessionId, branchMessageId, {
+                attachments: [...currentAttachments, ...images],
+              });
+            },
+            (usage) => {
+              if (!isGenerationRunActive(generation)) return;
+              const currentMessages = useChatStore.getState().activeMessages;
+              handleTokenUsageUpdate(
+                usage,
+                currentMessages,
+                lastUserMsg.id,
+                branchMessageId,
+                currentSessionId,
+                updateMessage,
+              );
+            },
+            generation.controller.signal,
+            effectiveContext.activePluginIds,
+            skillResolution.context,
+            (outputBlocks) => {
+              if (!isGenerationRunActive(generation)) return;
+              streamRenderer?.flush();
+              latestStreamOutputBlocks = outputBlocks;
+              receivedVisibleOutput =
+                receivedVisibleOutput || outputBlocks.length > 0;
+              updateMessageContent(
+                currentSessionId,
+                branchMessageId,
+                latestStreamText,
+                latestStreamReasoning,
+                outputBlocks,
+              );
+            },
+            toolConfirmationController,
+            createAgentToolStreamOptions({
+              sessionId: currentSessionId,
+              modelMessageId: branchMessageId,
+              knowledgeScope,
+              isActive: () => isGenerationRunActive(generation),
+            }),
+          ),
+      });
+
+      streamRenderer.flush();
       if (!isGenerationRunActive(generation)) return;
       const endTime = Date.now();
       updateMessage(currentSessionId, branchMessageId, {
+        generation: {
+          ...(useChatStore
+            .getState()
+            .activeMessages.find((message) => message.id === branchMessageId)
+            ?.generation || {
+            status: "streaming",
+            requestId,
+            ownerDeviceId: getSyncDeviceId(),
+            model: generationModel,
+            attempt: 0,
+            checkpointAt: startTime,
+          }),
+          status: "completed",
+          checkpointAt: endTime,
+        },
         timing: {
           startTime,
           endTime,
           duration: endTime - startTime,
         },
       });
+      await streamCheckpoint.flush();
 
       await syncActiveSession(currentSessionId);
       if (!isGenerationRunActive(generation)) return;
@@ -1486,43 +2097,316 @@ const ChatApp = () => {
         );
       }
     } catch (error: any) {
+      streamRenderer?.flush();
       if (error.name === "AbortError" || generation.controller.signal.aborted) {
         return;
       } else {
         logChatAppError(`${logPrefix} generation failed:`, error);
         const errorMessage =
           error instanceof Error ? error.message : "An unknown error occurred.";
+        const partialMessage = useChatStore
+          .getState()
+          .activeMessages.find((message) => message.id === branchMessageId);
+        const hasPartialOutput = Boolean(
+          partialMessage?.content ||
+          partialMessage?.reasoning ||
+          partialMessage?.outputBlocks?.length,
+        );
         updateMessage(currentSessionId, branchMessageId, {
-          generationError: {
-            message: errorMessage,
-            recoverable: true,
-          },
+          generation: partialMessage?.generation
+            ? {
+                ...partialMessage.generation,
+                status: "interrupted",
+                checkpointAt: Date.now(),
+              }
+            : undefined,
+          generationError: hasPartialOutput
+            ? undefined
+            : {
+                message: errorMessage,
+                recoverable: true,
+              },
           timing: {
             startTime,
             endTime: Date.now(),
             duration: Date.now() - startTime,
           },
         });
+        await streamCheckpoint?.flush();
         await syncActiveSessionWithNotice(
           currentSessionId,
           `Failed to persist ${logPrefix.toLowerCase()} error message`,
         );
       }
     } finally {
+      streamRenderer?.cancel();
+      if (activeStreamRenderRef.current === streamRenderer) {
+        activeStreamRenderRef.current = null;
+      }
+      if (activeStreamCheckpointRef.current === streamCheckpoint) {
+        activeStreamCheckpointRef.current = null;
+      }
       finishActiveGeneration(generation);
     }
   };
 
-  const handleRegenerate = async (messageId: string) => {
+  const handleRegenerate = async (messageId: string, model?: string) => {
     await generateModelResponseBranch(messageId, {
       errorMessage: t("errRegenerate"),
       logPrefix: "Regeneration",
+      model,
     });
   };
 
+  const handleContinueGeneration = async (messageId: string) => {
+    if (!navigator.onLine) {
+      showActionError(t("offlineReadOnly"));
+      return;
+    }
+    const sessionId = currentSessionId;
+    if (
+      !sessionId ||
+      isGenerating ||
+      useChatStore.getState().isActiveSessionLoading
+    ) {
+      return;
+    }
+
+    const sessionMessages = useChatStore.getState().activeMessages;
+    const messageIndex = sessionMessages.findIndex(
+      (message) => message.id === messageId,
+    );
+    const interruptedMessage = sessionMessages[messageIndex];
+    if (
+      !interruptedMessage ||
+      interruptedMessage.role !== "model" ||
+      interruptedMessage.generation?.status !== "interrupted"
+    ) {
+      return;
+    }
+    if (hasUnsafeContinuationToolState(interruptedMessage.toolCalls)) {
+      showActionError(t("errUnsafeContinue"));
+      return;
+    }
+
+    const generationModel = interruptedMessage.generation.model;
+    if (!availableModels.some((model) => model.name === generationModel)) {
+      showActionError(t("errModelUnavailable"));
+      return;
+    }
+
+    let continuationSkillContext = "";
+    if (interruptedMessage.skillInvocations?.length) {
+      try {
+        continuationSkillContext = resolveRecordedSkillInvocations({
+          invocations: interruptedMessage.skillInvocations,
+          installedSkills,
+        }).context;
+      } catch (error) {
+        logChatAppError("Continuation recorded skill unavailable.", error);
+        showActionError(t("errRecordedSkillChanged"));
+        return;
+      }
+    }
+
+    const existingContent = interruptedMessage.content;
+    const existingReasoning = interruptedMessage.reasoning || "";
+    const previousRequestId = interruptedMessage.generation.requestId;
+    const requestId = uuidv7();
+    const startedAt = Date.now();
+    const generation = beginActiveGeneration();
+    let receivedVisibleOutput = false;
+    let streamCheckpoint: ReturnType<
+      typeof createStreamCheckpointController
+    > | null = null;
+    let streamRenderer: StreamRenderScheduler<StreamRenderSnapshot> | null =
+      null;
+
+    updateMessage(sessionId, messageId, {
+      generationError: undefined,
+      outputBlocks: undefined,
+      generation: {
+        status: "streaming",
+        requestId,
+        ownerDeviceId: getSyncDeviceId(),
+        model: generationModel,
+        attempt: 0,
+        checkpointAt: startedAt,
+        continuedFrom: previousRequestId,
+      },
+    });
+
+    try {
+      const sessionMeta = getCurrentSession();
+      const effectiveContext = getEffectiveContextForSession(
+        sessionMeta,
+        generationModel,
+      );
+      const { prepareHistoryForLLM, streamChatResponse } =
+        await loadChatService();
+      const history = await prepareHistoryForLLM(
+        sessionMessages.slice(0, messageIndex + 1),
+        sessionMeta?.compression,
+        generationModel,
+      );
+      if (!isGenerationRunActive(generation)) return;
+
+      streamRenderer = createMessageStreamRenderer(sessionId, messageId);
+      activeStreamRenderRef.current = streamRenderer;
+      streamCheckpoint = createStreamCheckpointController({
+        persist: async () => {
+          streamRenderer?.flush();
+          const current = useChatStore
+            .getState()
+            .activeMessages.find((message) => message.id === messageId);
+          if (current?.generation) {
+            updateMessage(sessionId, messageId, {
+              generation: {
+                ...current.generation,
+                checkpointAt: Date.now(),
+              },
+            });
+          }
+          await useChatStore.getState().syncActiveSession(sessionId);
+        },
+      });
+      activeStreamCheckpointRef.current = streamCheckpoint;
+
+      await runWithPreOutputRetry({
+        signal: generation.controller.signal,
+        hasVisibleOutput: () => receivedVisibleOutput,
+        hasToolActivity: () => false,
+        onAttempt: (attempt) => {
+          const current = useChatStore
+            .getState()
+            .activeMessages.find((message) => message.id === messageId);
+          if (current?.generation) {
+            updateMessage(sessionId, messageId, {
+              generation: { ...current.generation, attempt },
+            });
+          }
+        },
+        run: () =>
+          streamChatResponse(
+            sessionId,
+            generationModel,
+            history,
+            "Continue the interrupted answer from exactly where it stopped. Do not repeat text that is already present.",
+            [],
+            {
+              ...resolveEffectiveChatRequestConfig({
+                chatConfig,
+                selectedModel: generationModel,
+                modelMetadata,
+                customModelMetadata,
+                searchCompatibility: effectiveContext.searchCompatibility,
+              }),
+              useSearch: false,
+            },
+            (streamText, streamReasoning) => {
+              if (!isGenerationRunActive(generation)) return;
+              receivedVisibleOutput =
+                receivedVisibleOutput || Boolean(streamText || streamReasoning);
+              const content =
+                existingContent +
+                trimContinuationOverlap(existingContent, streamText);
+              const reasoning = streamReasoning
+                ? existingReasoning +
+                  trimContinuationOverlap(existingReasoning, streamReasoning)
+                : existingReasoning;
+              streamRenderer?.schedule({
+                content,
+                reasoning: reasoning || undefined,
+              });
+              streamCheckpoint?.record(content.length + reasoning.length);
+            },
+            [effectiveContext.systemInstruction, continuationSkillContext]
+              .filter(Boolean)
+              .join("\n\n"),
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            generation.controller.signal,
+            [],
+            undefined,
+            undefined,
+            toolConfirmationController,
+            { disableTools: true },
+          ),
+      });
+
+      streamRenderer.flush();
+      if (!isGenerationRunActive(generation)) return;
+      const endedAt = Date.now();
+      const current = useChatStore
+        .getState()
+        .activeMessages.find((message) => message.id === messageId);
+      if (current?.generation) {
+        updateMessage(sessionId, messageId, {
+          generation: {
+            ...current.generation,
+            status: "completed",
+            checkpointAt: endedAt,
+          },
+          timing: {
+            startTime: interruptedMessage.timing?.startTime || startedAt,
+            endTime: endedAt,
+            duration:
+              endedAt - (interruptedMessage.timing?.startTime || startedAt),
+          },
+        });
+      }
+      await streamCheckpoint.flush();
+    } catch (error) {
+      streamRenderer?.flush();
+      if (
+        !(error instanceof Error && error.name === "AbortError") &&
+        !generation.controller.signal.aborted
+      ) {
+        const current = useChatStore
+          .getState()
+          .activeMessages.find((message) => message.id === messageId);
+        if (current?.generation) {
+          updateMessage(sessionId, messageId, {
+            generation: {
+              ...current.generation,
+              status: "interrupted",
+              checkpointAt: Date.now(),
+            },
+          });
+        }
+        await streamCheckpoint?.flush();
+      }
+    } finally {
+      streamRenderer?.cancel();
+      if (activeStreamRenderRef.current === streamRenderer) {
+        activeStreamRenderRef.current = null;
+      }
+      if (activeStreamCheckpointRef.current === streamCheckpoint) {
+        activeStreamCheckpointRef.current = null;
+      }
+      finishActiveGeneration(generation);
+    }
+  };
+
   const handleVersionChange = (msgId: string, direction: "prev" | "next") => {
-    if (currentSessionId && !useChatStore.getState().isActiveSessionLoading) {
+    if (
+      currentSessionId &&
+      !isGenerating &&
+      !useChatStore.getState().isActiveSessionLoading
+    ) {
       switchMessageVersion(currentSessionId, msgId, direction);
+    }
+  };
+
+  const handleVersionSelect = (msgId: string, targetId: string) => {
+    if (
+      currentSessionId &&
+      !isGenerating &&
+      !useChatStore.getState().isActiveSessionLoading
+    ) {
+      selectMessageVersion(currentSessionId, msgId, targetId);
     }
   };
 
@@ -1575,7 +2459,11 @@ const ChatApp = () => {
   };
 
   const handleEditMessage = (msgId: string, newContent: string) => {
-    if (currentSessionId && !useChatStore.getState().isActiveSessionLoading) {
+    if (
+      currentSessionId &&
+      !isGenerating &&
+      !useChatStore.getState().isActiveSessionLoading
+    ) {
       updateMessageContent(currentSessionId, msgId, newContent);
       void syncActiveSessionWithNotice(
         currentSessionId,
@@ -1588,6 +2476,10 @@ const ChatApp = () => {
     msgId: string,
     newContent: string,
   ) => {
+    if (!navigator.onLine) {
+      showActionError(t("offlineReadOnly"));
+      return;
+    }
     const sessionId = currentSessionId;
     if (
       !sessionId ||
@@ -1609,14 +2501,27 @@ const ChatApp = () => {
     }
     if (newContent === sourceMessage.content) return;
 
+    const sessionMeta = getCurrentSession();
+    const editSkillParameters = await prepareComposerSkillParameters(
+      sessionMeta,
+      selectedModel,
+    );
+    if (!editSkillParameters) return;
+
     abortBackgroundPostProcessing();
     const generation = beginActiveGeneration();
     let modelMessageId: string | null = null;
     let editedUserMessageId: string | null = null;
     let startTime = Date.now();
+    let receivedVisibleOutput = false;
+    let receivedToolActivity = false;
+    let streamCheckpoint: ReturnType<
+      typeof createStreamCheckpointController
+    > | null = null;
+    let streamRenderer: StreamRenderScheduler<StreamRenderSnapshot> | null =
+      null;
 
     try {
-      const sessionMeta = getCurrentSession();
       const {
         finalText,
         finalAttachments,
@@ -1624,12 +2529,16 @@ const ChatApp = () => {
         ragError,
         userMessage,
         effectiveContext,
+        knowledgeScope,
         injectedMemoryIds,
       } = await processPromptForModel(
         sessionMeta,
         newContent,
         sourceMessage.attachments || [],
         generation.controller.signal,
+        undefined,
+        sourceMessage.replyTo,
+        selectedModel,
       );
       if (!isGenerationRunActive(generation)) return;
       commitInjectedMemoryContext(sessionId, sessionMeta, injectedMemoryIds);
@@ -1640,10 +2549,22 @@ const ChatApp = () => {
         locale,
         installedSkills,
         activeSkillIds: effectiveContext.activeSkillIds,
-        autoSelect: skillAutoSelect,
+        skillBundles,
+        activeSkillBundleIds,
+        skillParameterValues: editSkillParameters.skillParameterValues,
+        skillBundleParameterValues:
+          editSkillParameters.skillBundleParameterValues,
+        autoSelect: skillAutoSelect && !effectiveContext.agentModeEnabled,
         signal: generation.controller.signal,
       });
       if (!isGenerationRunActive(generation)) return;
+      if (skillResolution.skippedSkillIds.length > 0) {
+        showActionError(
+          t("skillsSkipped", {
+            count: skillResolution.skippedSkillIds.length,
+          }),
+        );
+      }
 
       const modelDisplayName = getModelDisplayName(
         selectedModel,
@@ -1654,6 +2575,14 @@ const ChatApp = () => {
         ragSources,
         ragError,
       );
+      modelPlaceholder.generation = {
+        status: "streaming",
+        requestId: uuidv7(),
+        ownerDeviceId: getSyncDeviceId(),
+        model: selectedModel,
+        attempt: 0,
+        checkpointAt: modelPlaceholder.timestamp,
+      };
       startTime = modelPlaceholder.timestamp;
 
       const branchIds = createEditedUserMessageBranch(
@@ -1686,107 +2615,189 @@ const ChatApp = () => {
       if (!isGenerationRunActive(generation)) return;
 
       let latestStreamText = "";
-      let latestStreamReasoning = "";
+      let latestStreamReasoning: string | undefined;
+      let latestStreamOutputBlocks: Message["outputBlocks"];
 
-      await streamChatResponse(
-        sessionId,
-        selectedModel,
-        historyForApi,
-        finalText,
-        finalAttachments,
-        resolveEffectiveChatRequestConfig({
-          chatConfig,
-          selectedModel,
-          modelMetadata,
-          customModelMetadata,
-          searchCompatibility: effectiveContext.searchCompatibility,
-        }),
-        (streamText, streamReasoning, outputBlocks) => {
-          if (!isGenerationRunActive(generation) || !modelMessageId) return;
-          latestStreamText = streamText;
-          if (streamReasoning !== undefined) {
-            latestStreamReasoning = streamReasoning;
-          }
-          updateMessageContent(
-            sessionId,
-            modelMessageId,
-            streamText,
-            streamReasoning,
-            outputBlocks,
-          );
-        },
-        effectiveContext.systemInstruction,
-        (isSearching, results) => {
-          if (!isGenerationRunActive(generation) || !modelMessageId) return;
-          const currentMessage = useChatStore
+      streamRenderer = createMessageStreamRenderer(sessionId, modelMessageId);
+      activeStreamRenderRef.current = streamRenderer;
+
+      streamCheckpoint = createStreamCheckpointController({
+        persist: async () => {
+          streamRenderer?.flush();
+          if (!modelMessageId) return;
+          const current = useChatStore
             .getState()
             .activeMessages.find((message) => message.id === modelMessageId);
-          const updates = buildSearchUpdate(
-            currentMessage,
-            isSearching,
-            results,
-          );
-          updateMessage(sessionId, modelMessageId, updates);
-        },
-        (toolCalls) => {
-          if (!isGenerationRunActive(generation) || !modelMessageId) return;
-          updateMessage(sessionId, modelMessageId, { toolCalls });
-        },
-        (images) => {
-          if (!isGenerationRunActive(generation) || !modelMessageId) return;
-          const currentActiveMsgs = useChatStore.getState().activeMessages;
-          const msg = currentActiveMsgs.find(
-            (message) => message.id === modelMessageId,
-          );
-          const currentAttachments = msg?.attachments || [];
-
-          updateMessage(sessionId, modelMessageId, {
-            attachments: [...currentAttachments, ...images],
-          });
-        },
-        (usage) => {
-          if (
-            !isGenerationRunActive(generation) ||
-            !modelMessageId ||
-            !editedUserMessageId
-          ) {
-            return;
+          if (current?.generation) {
+            updateMessage(sessionId, modelMessageId, {
+              generation: {
+                ...current.generation,
+                checkpointAt: Date.now(),
+              },
+            });
           }
-          const currentMessages = useChatStore.getState().activeMessages;
-          handleTokenUsageUpdate(
-            usage,
-            currentMessages,
-            editedUserMessageId,
-            modelMessageId,
-            sessionId,
-            updateMessage,
-          );
+          await useChatStore.getState().syncActiveSession(sessionId);
         },
-        generation.controller.signal,
-        effectiveContext.activePluginIds,
-        skillResolution.context,
-        (outputBlocks) => {
-          if (!isGenerationRunActive(generation) || !modelMessageId) return;
-          updateMessageContent(
-            sessionId,
-            modelMessageId,
-            latestStreamText,
-            latestStreamReasoning || undefined,
-            outputBlocks,
-          );
-        },
-        toolConfirmationController,
-      );
+      });
+      activeStreamCheckpointRef.current = streamCheckpoint;
 
+      await runWithPreOutputRetry({
+        signal: generation.controller.signal,
+        hasVisibleOutput: () => receivedVisibleOutput,
+        hasToolActivity: () => receivedToolActivity,
+        onAttempt: (attempt) => {
+          if (!modelMessageId) return;
+          const current = useChatStore
+            .getState()
+            .activeMessages.find((message) => message.id === modelMessageId);
+          if (current?.generation) {
+            updateMessage(sessionId, modelMessageId, {
+              generation: { ...current.generation, attempt },
+            });
+          }
+        },
+        run: () =>
+          streamChatResponse(
+            sessionId,
+            selectedModel,
+            historyForApi,
+            finalText,
+            finalAttachments,
+            resolveEffectiveChatRequestConfig({
+              chatConfig,
+              selectedModel,
+              modelMetadata,
+              customModelMetadata,
+              searchCompatibility: effectiveContext.searchCompatibility,
+            }),
+            (streamText, streamReasoning, outputBlocks) => {
+              if (!isGenerationRunActive(generation) || !modelMessageId) return;
+              latestStreamText = streamText;
+              if (streamReasoning !== undefined) {
+                latestStreamReasoning = streamReasoning;
+              }
+              if (outputBlocks !== undefined) {
+                latestStreamOutputBlocks = outputBlocks;
+              }
+              receivedVisibleOutput =
+                receivedVisibleOutput ||
+                Boolean(streamText || streamReasoning || outputBlocks?.length);
+              streamRenderer?.schedule({
+                content: latestStreamText,
+                reasoning: latestStreamReasoning,
+                outputBlocks: latestStreamOutputBlocks,
+              });
+              streamCheckpoint?.record(
+                latestStreamText.length + (latestStreamReasoning?.length || 0),
+              );
+            },
+            effectiveContext.systemInstruction,
+            (isSearching, results) => {
+              if (!isGenerationRunActive(generation) || !modelMessageId) return;
+              streamRenderer?.flush();
+              receivedVisibleOutput = receivedVisibleOutput || isSearching;
+              const currentMessage = useChatStore
+                .getState()
+                .activeMessages.find(
+                  (message) => message.id === modelMessageId,
+                );
+              const updates = buildSearchUpdate(
+                currentMessage,
+                isSearching,
+                results,
+                {
+                  replaceResults: effectiveContext.agentModeEnabled,
+                },
+              );
+              updateMessage(sessionId, modelMessageId, updates);
+            },
+            (toolCalls) => {
+              if (!isGenerationRunActive(generation) || !modelMessageId) return;
+              streamRenderer?.flush();
+              receivedToolActivity =
+                receivedToolActivity || toolCalls.length > 0;
+              updateMessage(sessionId, modelMessageId, { toolCalls });
+            },
+            (images) => {
+              if (!isGenerationRunActive(generation) || !modelMessageId) return;
+              streamRenderer?.flush();
+              receivedVisibleOutput =
+                receivedVisibleOutput || images.length > 0;
+              const currentActiveMsgs = useChatStore.getState().activeMessages;
+              const msg = currentActiveMsgs.find(
+                (message) => message.id === modelMessageId,
+              );
+              const currentAttachments = msg?.attachments || [];
+
+              updateMessage(sessionId, modelMessageId, {
+                attachments: [...currentAttachments, ...images],
+              });
+            },
+            (usage) => {
+              if (
+                !isGenerationRunActive(generation) ||
+                !modelMessageId ||
+                !editedUserMessageId
+              ) {
+                return;
+              }
+              const currentMessages = useChatStore.getState().activeMessages;
+              handleTokenUsageUpdate(
+                usage,
+                currentMessages,
+                editedUserMessageId,
+                modelMessageId,
+                sessionId,
+                updateMessage,
+              );
+            },
+            generation.controller.signal,
+            effectiveContext.activePluginIds,
+            skillResolution.context,
+            (outputBlocks) => {
+              if (!isGenerationRunActive(generation) || !modelMessageId) return;
+              streamRenderer?.flush();
+              latestStreamOutputBlocks = outputBlocks;
+              receivedVisibleOutput =
+                receivedVisibleOutput || outputBlocks.length > 0;
+              updateMessageContent(
+                sessionId,
+                modelMessageId,
+                latestStreamText,
+                latestStreamReasoning,
+                outputBlocks,
+              );
+            },
+            toolConfirmationController,
+            createAgentToolStreamOptions({
+              sessionId,
+              modelMessageId: modelMessageId!,
+              knowledgeScope,
+              isActive: () =>
+                isGenerationRunActive(generation) && Boolean(modelMessageId),
+            }),
+          ),
+      });
+
+      streamRenderer.flush();
       if (!isGenerationRunActive(generation) || !modelMessageId) return;
       const endTime = Date.now();
       updateMessage(sessionId, modelMessageId, {
+        generation: {
+          ...(useChatStore
+            .getState()
+            .activeMessages.find((message) => message.id === modelMessageId)
+            ?.generation || modelPlaceholder.generation),
+          status: "completed",
+          checkpointAt: endTime,
+        },
         timing: {
           startTime,
           endTime,
           duration: endTime - startTime,
         },
       });
+      await streamCheckpoint.flush();
 
       await syncActiveSession(sessionId);
       if (!isGenerationRunActive(generation)) return;
@@ -1806,6 +2817,7 @@ const ChatApp = () => {
         );
       }
     } catch (error: any) {
+      streamRenderer?.flush();
       if (error.name === "AbortError" || generation.controller.signal.aborted) {
         return;
       }
@@ -1814,17 +2826,35 @@ const ChatApp = () => {
       const errorMessage =
         error instanceof Error ? error.message : "An unknown error occurred.";
       if (modelMessageId) {
+        const partialMessage = useChatStore
+          .getState()
+          .activeMessages.find((message) => message.id === modelMessageId);
+        const hasPartialOutput = Boolean(
+          partialMessage?.content ||
+          partialMessage?.reasoning ||
+          partialMessage?.outputBlocks?.length,
+        );
         updateMessage(sessionId, modelMessageId, {
-          generationError: {
-            message: errorMessage,
-            recoverable: true,
-          },
+          generation: partialMessage?.generation
+            ? {
+                ...partialMessage.generation,
+                status: "interrupted",
+                checkpointAt: Date.now(),
+              }
+            : undefined,
+          generationError: hasPartialOutput
+            ? undefined
+            : {
+                message: errorMessage,
+                recoverable: true,
+              },
           timing: {
             startTime,
             endTime: Date.now(),
             duration: Date.now() - startTime,
           },
         });
+        await streamCheckpoint?.flush();
         await syncActiveSessionWithNotice(
           sessionId,
           "Failed to persist edited user message branch error",
@@ -1833,13 +2863,26 @@ const ChatApp = () => {
         showActionError(t("errEditUserMessage"));
       }
     } finally {
+      streamRenderer?.cancel();
+      if (activeStreamRenderRef.current === streamRenderer) {
+        activeStreamRenderRef.current = null;
+      }
+      if (activeStreamCheckpointRef.current === streamCheckpoint) {
+        activeStreamCheckpointRef.current = null;
+      }
       finishActiveGeneration(generation);
     }
   };
 
   const handleDeleteMessage = async (msgId: string) => {
     const sessionId = currentSessionId;
-    if (!sessionId || useChatStore.getState().isActiveSessionLoading) return;
+    if (
+      !sessionId ||
+      isGenerating ||
+      useChatStore.getState().isActiveSessionLoading
+    ) {
+      return;
+    }
 
     try {
       await deleteMessage(sessionId, msgId);
@@ -1861,7 +2904,11 @@ const ChatApp = () => {
           isGenerating,
         })
       ) {
+        const renderer = activeStreamRenderRef.current;
+        const checkpoint = activeStreamCheckpointRef.current;
+        renderer?.flush();
         await stopActiveGeneration();
+        await checkpoint?.flush();
       }
 
       await deleteSession(sessionId);
@@ -1876,7 +2923,15 @@ const ChatApp = () => {
 
     try {
       abortBackgroundPostProcessing();
-      await duplicateSession(sessionId);
+      const sourceSession = useChatStore
+        .getState()
+        .sessions.find((session) => session.id === sessionId);
+      const duplicateTitle = sourceSession
+        ? t("duplicateTitle", {
+            title: getSessionDisplayTitle(sourceSession.title, t("newChat")),
+          })
+        : undefined;
+      await duplicateSession(sessionId, duplicateTitle);
     } catch (error) {
       logChatAppError("Failed to duplicate session", error);
       showActionError(t("errDuplicateChat"));
@@ -1885,7 +2940,13 @@ const ChatApp = () => {
 
   const handleRetractMessage = async (msg: Message) => {
     const sessionId = currentSessionId;
-    if (!sessionId || useChatStore.getState().isActiveSessionLoading) return;
+    if (
+      !sessionId ||
+      isGenerating ||
+      useChatStore.getState().isActiveSessionLoading
+    ) {
+      return;
+    }
 
     try {
       await deleteMessageAndSubsequent(sessionId, msg.id);
@@ -1930,13 +2991,18 @@ const ChatApp = () => {
 
     if (msgs.length === 0) return;
 
-    const { generateChatTitle } = await loadChatService();
-    const newTitle = await generateChatTitle(msgs);
-    const currentSession = useChatStore
-      .getState()
-      .sessions.find((session) => session.id === sessionId);
-    if (shouldApplyRequestedTitle(currentSession, snapshot)) {
-      updateSessionTitle(sessionId, newTitle);
+    try {
+      const { generateChatTitle } = await loadChatService();
+      const newTitle = await generateChatTitle(msgs);
+      const currentSession = useChatStore
+        .getState()
+        .sessions.find((session) => session.id === sessionId);
+      if (shouldApplyRequestedTitle(currentSession, snapshot)) {
+        updateSessionTitle(sessionId, newTitle);
+      }
+    } catch (error) {
+      logChatAppError("Failed to generate a smart rename", error);
+      showActionError(t("errRenameChat"));
     }
   };
 
@@ -1956,65 +3022,80 @@ const ChatApp = () => {
   };
 
   const handleSuggestionClick = (question: string) => {
-    handleSendMessage(question, []);
+    void handleSendMessage(question, []);
   };
 
   // --- Render ---
 
   return (
-    <ChatAppShell
-      actionError={actionError}
-      sessions={sessions}
-      currentSessionId={currentSessionId}
-      currentSession={currentSession}
-      messages={messages}
-      activeMessageTree={activeMessageTree}
-      isGenerating={isGenerating}
-      isActiveSessionLoading={isActiveSessionLoading}
-      availableModels={availableModels}
-      selectedModel={selectedModel}
-      isSearchEnabled={chatConfig.useSearch}
-      viewMode={viewMode}
-      settingsTab={settingsTab}
-      isSidebarOpen={isSidebarOpen}
-      isNonDesktopViewport={isNonDesktopViewport}
-      isSidebarDrawerOpen={isSidebarDrawerOpen}
-      mainInertProps={mainInertProps}
-      shouldShowChatTitleBar={shouldShowChatTitleBar}
-      welcomeState={welcomeState}
-      messageInputVariant={messageInputVariant}
-      messagesScrollRef={messagesScrollRef}
-      messagesEndRef={messagesEndRef}
-      messageInputRef={messageInputRef}
-      setIsSidebarOpen={setIsSidebarOpen}
-      navigateToPanel={navigateToPanel}
-      handleSettingsTabChange={handleSettingsTabChange}
-      updateIsNearMessageBottom={updateIsNearMessageBottom}
-      stopActiveGenerationWithFeedback={stopActiveGenerationWithFeedback}
-      selectSession={handleSelectSession}
-      handleNewChat={handleNewChat}
-      handleDeleteSession={handleDeleteSession}
-      updateSessionTitle={updateSessionTitle}
-      toggleSessionPin={toggleSessionPin}
-      handleDuplicateSession={handleDuplicateSession}
-      handleSmartRename={handleSmartRename}
-      handleAssistantSelect={handleAssistantSelect}
-      updateSessionInstruction={updateSessionInstruction}
-      handleEditMessage={handleEditMessage}
-      handleDeleteMessage={handleDeleteMessage}
-      handleSubmitUserMessageEdit={handleSubmitUserMessageEdit}
-      handleRetractMessage={handleRetractMessage}
-      handleRegenerate={handleRegenerate}
-      handleVersionChange={handleVersionChange}
-      handleSendMessage={handleSendMessage}
-      handleSuggestionClick={handleSuggestionClick}
-      handleStopGeneration={handleStopGeneration}
-      setModel={setModel}
-      onToggleSearch={() => setChatConfig({ useSearch: !chatConfig.useSearch })}
-      pendingToolConfirmations={pendingToolConfirmations}
-      onToolConfirmationDecision={decideToolConfirmation}
-      onRevokeToolSessionApproval={revokeToolSessionApproval}
-    />
+    <>
+      <ChatAppShell
+        actionError={actionError}
+        sessions={sessions}
+        currentSessionId={currentSessionId}
+        currentSession={currentSession}
+        messages={messages}
+        activeMessageTree={activeMessageTree}
+        isGenerating={isGenerating}
+        isActiveSessionLoading={isActiveSessionLoading}
+        availableModels={availableModels}
+        isModelBootstrapReady={serverModelBootstrapReady}
+        selectedModel={selectedModel}
+        isSearchEnabled={chatConfig.useSearch}
+        viewMode={viewMode}
+        settingsTab={settingsTab}
+        isSidebarOpen={isSidebarOpen}
+        isNonDesktopViewport={isNonDesktopViewport}
+        isSidebarDrawerOpen={isSidebarDrawerOpen}
+        mainInertProps={mainInertProps}
+        shouldShowChatTitleBar={shouldShowChatTitleBar}
+        welcomeState={welcomeState}
+        messageInputVariant={messageInputVariant}
+        messagesScrollRef={messagesScrollRef}
+        messageInputRef={messageInputRef}
+        setIsSidebarOpen={setIsSidebarOpen}
+        navigateToPanel={navigateToPanel}
+        handleSettingsTabChange={handleSettingsTabChange}
+        stopActiveGenerationWithFeedback={stopActiveGenerationWithFeedback}
+        selectSession={handleSelectSession}
+        handleNewChat={handleNewChat}
+        handleDeleteSession={handleDeleteSession}
+        updateSessionTitle={updateSessionTitle}
+        toggleSessionPin={toggleSessionPin}
+        handleDuplicateSession={handleDuplicateSession}
+        handleSmartRename={handleSmartRename}
+        handleAssistantSelect={handleAssistantSelect}
+        updateSessionInstruction={updateSessionInstruction}
+        handleEditMessage={handleEditMessage}
+        handleDeleteMessage={handleDeleteMessage}
+        handleSubmitUserMessageEdit={handleSubmitUserMessageEdit}
+        handleRetractMessage={handleRetractMessage}
+        handleRegenerate={handleRegenerate}
+        handleContinueGeneration={handleContinueGeneration}
+        handleVersionChange={handleVersionChange}
+        handleVersionSelect={handleVersionSelect}
+        handleSendMessage={handleSendMessage}
+        prepareComposerSkillParameters={() =>
+          prepareComposerSkillParameters(currentSession, selectedModel)
+        }
+        handleSuggestionClick={handleSuggestionClick}
+        handleStopGeneration={handleStopGeneration}
+        setModel={setModel}
+        onToggleSearch={() =>
+          setChatConfig({ useSearch: !chatConfig.useSearch })
+        }
+        pendingToolConfirmations={pendingToolConfirmations}
+        onToolConfirmationDecision={decideToolConfirmation}
+        onRevokeToolSessionApproval={revokeToolSessionApproval}
+      />
+      <SkillParameterDialog
+        open={Boolean(skillParameterDialog)}
+        requests={skillParameterDialog?.requests || []}
+        initialValues={skillParameterDialog?.initialValues}
+        onCancel={() => closeSkillParameterDialog(null)}
+        onSubmit={closeSkillParameterDialog}
+      />
+    </>
   );
 };
 

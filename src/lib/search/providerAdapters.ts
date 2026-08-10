@@ -1,4 +1,4 @@
-import type { ImageSource, Source } from "@/types";
+import type { ImageSource, SearchTimeRange, Source } from "@/types";
 import { safeFetchJson } from "../security/safeFetch";
 import {
   getSearchProviderPolicy,
@@ -27,6 +27,7 @@ interface SearchProviderContext {
   provider: SearchProvider;
   query: string;
   scope?: string;
+  timeRange?: SearchTimeRange;
   apiKey?: string;
   baseUrl?: string;
   maxResultNumber: number;
@@ -115,10 +116,18 @@ const rewritingPrompt = `You are tasked with re-writing the following text to ma
 
 **Respond only the updated markdown text, and no additional text before or after.**`;
 
+const FIRECRAWL_TIME_FILTERS: Partial<Record<SearchTimeRange, string>> = {
+  day: "qdr:d",
+  week: "qdr:w",
+  month: "qdr:m",
+  year: "qdr:y",
+};
+
 export async function runSearchProvider({
   provider,
   query,
   scope,
+  timeRange,
   apiKey,
   baseUrl,
   maxResultNumber,
@@ -183,7 +192,9 @@ export async function runSearchProvider({
           query,
           limit: maxResultNumber,
           sources: ["web", "images"],
-          tbs: "qdr:w",
+          ...(timeRange && FIRECRAWL_TIME_FILTERS[timeRange]
+            ? { tbs: FIRECRAWL_TIME_FILTERS[timeRange] }
+            : {}),
           scrapeOptions: {
             formats: [{ type: "markdown" }],
           },

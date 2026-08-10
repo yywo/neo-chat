@@ -27,10 +27,13 @@ import { useSettingsStore } from "@/store/core/settingsStore";
 import {
   fetchApiGuruListResult,
   fetchMcpServerPageResult,
+  getCachedMcpServers,
   getCachedPlugins,
+  discoverMcpBridgeServers,
   installPlugin,
   installCustomPlugin,
   installCustomMcpServer,
+  type BridgeDiscoveredServer,
 } from "@/services/api/pluginService";
 import { Plugin } from "@/types";
 import SafeImage from "@/components/ui/SafeImage";
@@ -62,6 +65,8 @@ type MarketSource = "plugins" | "mcp";
 
 const ITEMS_PER_PAGE = 20;
 const CUSTOM_PLUGIN_INPUT_MAX_CHARS = 2_000_000;
+const isBrowserOnline = () =>
+  typeof navigator === "undefined" || navigator.onLine;
 const ENDPOINT_CONFIG_PLUGIN_IDS = new Set([
   "openai-image-generation",
   "gemini-image-generation",
@@ -364,30 +369,27 @@ const CustomPluginModal = ({
   );
 };
 
-const CustomMcpServerModal = ({
+const McpInstallAuthModal = ({
+  plugin,
   onClose,
   onInstall,
 }: {
+  plugin: Plugin;
   onClose: () => void;
-  onInstall: (plugin: Plugin, bearerToken?: string) => Promise<void> | void;
+  onInstall: (authValue: string) => Promise<string | null>;
 }) => {
   const t = useTranslations("Plugin");
-  const [name, setName] = useState("");
-  const [serverUrl, setServerUrl] = useState("");
-  const [bearerToken, setBearerToken] = useState("");
+  const [authValue, setAuthValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isMountedRef = useRef(true);
-  const installRequestRef = useRef(0);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const modalId = useId();
   const titleId = `${modalId}-title`;
   const descriptionId = `${modalId}-description`;
-  const nameInputId = `${modalId}-name`;
-  const urlInputId = `${modalId}-url`;
-  const tokenInputId = `${modalId}-token`;
+  const inputId = `${modalId}-auth-input`;
   const errorId = `${modalId}-error`;
 
   useEffect(() => {
@@ -400,7 +402,6 @@ const CustomMcpServerModal = ({
 
     return () => {
       isMountedRef.current = false;
-      installRequestRef.current += 1;
       if (previousFocusRef.current?.isConnected) {
         previousFocusRef.current.focus({ preventScroll: true });
       }
@@ -423,7 +424,216 @@ const CustomMcpServerModal = ({
   };
 
   const handleInstall = async () => {
-    if (!name.trim() || !serverUrl.trim()) return;
+    const normalizedAuthValue = authValue.trim();
+    if (!normalizedAuthValue || isLoading) return;
+
+    setIsLoading(true);
+    setError(null);
+    try {
+      const installError = await onInstall(normalizedAuthValue);
+      if (!isMountedRef.current) return;
+      if (installError) {
+        setError(installError);
+        return;
+      }
+      onClose();
+    } finally {
+      if (isMountedRef.current) {
+        setIsLoading(false);
+      }
+    }
+  };
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-9999 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm animate-in fade-in duration-200"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          handleClose();
+        }
+      }}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+        tabIndex={-1}
+        onKeyDown={handleKeyDown}
+        className="flex w-full max-w-md flex-col gap-4 rounded-2xl border border-gray-200 bg-white p-6 shadow-2xl dark:border-border dark:bg-card"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <h2
+            id={titleId}
+            className="flex min-w-0 items-center gap-2 text-lg font-bold text-gray-800 dark:text-foreground"
+          >
+            <KeyRound
+              size={20}
+              className="shrink-0 text-blue-500"
+              aria-hidden="true"
+            />
+            <span className="truncate">{t("mcpInstallAuthTitle")}</span>
+          </h2>
+          <button
+            ref={closeButtonRef}
+            type="button"
+            aria-label={t("closeMcpAuthInstaller")}
+            onClick={handleClose}
+            disabled={isLoading}
+            className="rounded-full p-1 text-gray-500 hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-muted"
+          >
+            <X size={20} aria-hidden="true" />
+          </button>
+        </div>
+
+        <p
+          id={descriptionId}
+          className="text-sm leading-relaxed text-gray-500 dark:text-muted-foreground"
+        >
+          {t("mcpInstallAuthDescription", { title: plugin.title })}
+        </p>
+
+        <div className="space-y-2">
+          <label
+            htmlFor={inputId}
+            className="text-sm font-medium text-gray-700 dark:text-foreground/85"
+          >
+            {t("mcpInstallAuthLabel")}
+          </label>
+          <input
+            id={inputId}
+            name={`mcp-install-auth-${plugin.id}`}
+            type="password"
+            value={authValue}
+            onChange={(event) => setAuthValue(event.target.value)}
+            maxLength={PLUGIN_CONFIG_LIMITS.maxAuthValueChars}
+            autoComplete="off"
+            spellCheck={false}
+            aria-describedby={`${descriptionId}${error ? ` ${errorId}` : ""}`}
+            placeholder={t("authPlaceholder")}
+            className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 font-mono text-sm text-gray-800 transition-[background-color,border-color,box-shadow,color] focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-border dark:bg-muted dark:text-foreground"
+          />
+        </div>
+
+        {error && (
+          <div
+            id={errorId}
+            role="alert"
+            className="flex items-center gap-2 rounded-lg bg-red-50 p-3 text-xs text-red-600 dark:bg-red-900/20 dark:text-red-400"
+          >
+            <AlertTriangle size={14} className="shrink-0" aria-hidden="true" />
+            {error}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <button
+            type="button"
+            onClick={handleClose}
+            disabled={isLoading}
+            className="rounded-lg px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 disabled:cursor-not-allowed disabled:opacity-60 dark:text-muted-foreground dark:hover:bg-muted"
+          >
+            {t("cancel")}
+          </button>
+          <button
+            type="button"
+            aria-label={t("installPluginAria", { title: plugin.title })}
+            aria-busy={isLoading || undefined}
+            onClick={handleInstall}
+            disabled={isLoading || !authValue.trim()}
+            className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isLoading ? (
+              <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+            ) : (
+              <Download size={16} aria-hidden="true" />
+            )}
+            {t("install")}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+};
+
+const CustomMcpServerModal = ({
+  onClose,
+  onInstall,
+  bridgeDiscoveryEnabled,
+  isOnline,
+}: {
+  onClose: () => void;
+  onInstall: (plugin: Plugin, bearerToken?: string) => Promise<void> | void;
+  bridgeDiscoveryEnabled: boolean;
+  isOnline: boolean;
+}) => {
+  const t = useTranslations("Plugin");
+  const [name, setName] = useState("");
+  const [serverUrl, setServerUrl] = useState("");
+  const [bearerToken, setBearerToken] = useState("");
+  const [bridgeManifestUrl, setBridgeManifestUrl] = useState("");
+  const [bridgeToken, setBridgeToken] = useState("");
+  const [bridgeServers, setBridgeServers] = useState<BridgeDiscoveredServer[]>(
+    [],
+  );
+  const [importedBridgeIds, setImportedBridgeIds] = useState<string[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isDiscovering, setIsDiscovering] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const isMountedRef = useRef(true);
+  const installRequestRef = useRef(0);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const modalId = useId();
+  const titleId = `${modalId}-title`;
+  const descriptionId = `${modalId}-description`;
+  const nameInputId = `${modalId}-name`;
+  const urlInputId = `${modalId}-url`;
+  const tokenInputId = `${modalId}-token`;
+  const bridgeSectionId = `${modalId}-bridge-section`;
+  const bridgeUrlInputId = `${modalId}-bridge-url`;
+  const bridgeTokenInputId = `${modalId}-bridge-token`;
+  const errorId = `${modalId}-error`;
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    previousFocusRef.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    closeButtonRef.current?.focus({ preventScroll: true });
+
+    return () => {
+      isMountedRef.current = false;
+      installRequestRef.current += 1;
+      if (previousFocusRef.current?.isConnected) {
+        previousFocusRef.current.focus({ preventScroll: true });
+      }
+      previousFocusRef.current = null;
+    };
+  }, []);
+
+  const handleClose = () => {
+    if (!isLoading && !isDiscovering) onClose();
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      handleClose();
+      return;
+    }
+
+    trapModalFocus(event, dialogRef.current);
+  };
+
+  const handleInstall = async () => {
+    if (!isOnline || !isBrowserOnline() || !name.trim() || !serverUrl.trim()) {
+      return;
+    }
     const requestId = installRequestRef.current + 1;
     installRequestRef.current = requestId;
     setIsLoading(true);
@@ -455,6 +665,82 @@ const CustomMcpServerModal = ({
     }
   };
 
+  const handleBridgeDiscovery = async () => {
+    if (
+      !isOnline ||
+      !isBrowserOnline() ||
+      !bridgeManifestUrl.trim() ||
+      !bridgeToken.trim()
+    ) {
+      return;
+    }
+    const requestId = installRequestRef.current + 1;
+    installRequestRef.current = requestId;
+    setIsDiscovering(true);
+    setError(null);
+
+    try {
+      const servers = await discoverMcpBridgeServers({
+        manifestUrl: bridgeManifestUrl,
+        bearerToken: bridgeToken,
+      });
+      if (!isMountedRef.current || installRequestRef.current !== requestId) {
+        return;
+      }
+      setBridgeServers(servers);
+      setImportedBridgeIds([]);
+    } catch (e) {
+      if (isMountedRef.current && installRequestRef.current === requestId) {
+        setBridgeServers([]);
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      if (isMountedRef.current && installRequestRef.current === requestId) {
+        setIsDiscovering(false);
+      }
+    }
+  };
+
+  const handleBridgeImport = async (server: BridgeDiscoveredServer) => {
+    if (
+      !isOnline ||
+      !isBrowserOnline() ||
+      importedBridgeIds.includes(server.id)
+    ) {
+      return;
+    }
+    const requestId = installRequestRef.current + 1;
+    installRequestRef.current = requestId;
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const token = bridgeToken.trim();
+      const plugin = await installCustomMcpServer({
+        name: server.label,
+        serverUrl: server.serverUrl,
+        bearerToken: token,
+        source: "bridge",
+      });
+      if (!isMountedRef.current || installRequestRef.current !== requestId) {
+        return;
+      }
+      await onInstall(plugin, token);
+      if (!isMountedRef.current || installRequestRef.current !== requestId) {
+        return;
+      }
+      setImportedBridgeIds((ids) => [...ids, server.id]);
+    } catch (e) {
+      if (isMountedRef.current && installRequestRef.current === requestId) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      if (isMountedRef.current && installRequestRef.current === requestId) {
+        setIsLoading(false);
+      }
+    }
+  };
+
   return createPortal(
     <div
       className="fixed inset-0 z-9999 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm animate-in fade-in duration-200"
@@ -472,7 +758,7 @@ const CustomMcpServerModal = ({
         aria-describedby={descriptionId}
         tabIndex={-1}
         onKeyDown={handleKeyDown}
-        className="flex w-full max-w-lg flex-col gap-4 rounded-2xl border border-gray-200 bg-white p-6 shadow-2xl dark:border-border dark:bg-card"
+        className="custom-scrollbar flex max-h-[90vh] w-full max-w-lg flex-col gap-4 overflow-y-auto rounded-2xl border border-gray-200 bg-white p-6 shadow-2xl dark:border-border dark:bg-card"
       >
         <div className="flex justify-between items-center">
           <h2
@@ -488,11 +774,156 @@ const CustomMcpServerModal = ({
             aria-label={t("closeCustomMcpInstaller")}
             onClick={handleClose}
             className="rounded-full p-1 text-gray-500 hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-muted"
-            disabled={isLoading}
+            disabled={isLoading || isDiscovering}
           >
             <X size={20} aria-hidden="true" />
           </button>
         </div>
+
+        {!isOnline && (
+          <div
+            role="status"
+            className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200"
+          >
+            <AlertTriangle
+              size={14}
+              className="mt-0.5 shrink-0"
+              aria-hidden="true"
+            />
+            <span>{t("mcpOfflineUnavailable")}</span>
+          </div>
+        )}
+
+        {bridgeDiscoveryEnabled && (
+          <section
+            aria-labelledby={bridgeSectionId}
+            className="rounded-2xl border border-blue-200/80 bg-blue-50/60 p-4 dark:border-blue-400/20 dark:bg-blue-400/5"
+          >
+            <div className="mb-3 flex items-start gap-3">
+              <span className="mt-0.5 rounded-lg bg-blue-600 p-1.5 text-white shadow-sm shadow-blue-500/20">
+                <Zap size={14} aria-hidden="true" />
+              </span>
+              <div>
+                <h3
+                  id={bridgeSectionId}
+                  className="text-sm font-semibold text-gray-800 dark:text-foreground"
+                >
+                  {t("bridgeDiscoveryTitle")}
+                </h3>
+                <p className="mt-0.5 text-[11px] leading-4 text-gray-500 dark:text-muted-foreground">
+                  {t("bridgeDiscoveryHint")}
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <label
+                  htmlFor={bridgeUrlInputId}
+                  className="text-xs font-medium text-gray-700 dark:text-foreground/85"
+                >
+                  {t("bridgeManifestUrlLabel")}
+                </label>
+                <input
+                  id={bridgeUrlInputId}
+                  type="url"
+                  name="mcp-bridge-manifest-url"
+                  value={bridgeManifestUrl}
+                  maxLength={2048}
+                  autoComplete="off"
+                  placeholder={t("bridgeManifestUrlPlaceholder")}
+                  onChange={(event) => setBridgeManifestUrl(event.target.value)}
+                  className="w-full rounded-xl border border-blue-200 bg-white px-3 py-2 font-mono text-xs text-gray-800 transition-[border-color,box-shadow] focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-blue-400/20 dark:bg-background dark:text-foreground"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label
+                  htmlFor={bridgeTokenInputId}
+                  className="text-xs font-medium text-gray-700 dark:text-foreground/85"
+                >
+                  {t("bridgeTokenLabel")}
+                </label>
+                <input
+                  id={bridgeTokenInputId}
+                  type="password"
+                  name="mcp-bridge-bearer-token"
+                  value={bridgeToken}
+                  maxLength={4096}
+                  autoComplete="off"
+                  placeholder={t("bridgeTokenPlaceholder")}
+                  onChange={(event) => setBridgeToken(event.target.value)}
+                  className="w-full rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs text-gray-800 transition-[border-color,box-shadow] focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-blue-400/20 dark:bg-background dark:text-foreground"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={handleBridgeDiscovery}
+                disabled={
+                  !isOnline ||
+                  isLoading ||
+                  isDiscovering ||
+                  !bridgeManifestUrl.trim() ||
+                  !bridgeToken.trim()
+                }
+                aria-busy={isDiscovering || undefined}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 disabled:cursor-not-allowed disabled:opacity-50 dark:border-blue-400/20 dark:bg-background dark:text-blue-300 dark:hover:bg-blue-400/10"
+              >
+                <RefreshCw
+                  size={14}
+                  className={isDiscovering ? "animate-spin" : ""}
+                  aria-hidden="true"
+                />
+                {isDiscovering ? t("bridgeDiscovering") : t("bridgeDiscover")}
+              </button>
+
+              {bridgeServers.length > 0 && (
+                <ul
+                  aria-label={t("bridgeServerListAria")}
+                  className="space-y-2 border-t border-blue-200/70 pt-3 dark:border-blue-400/15"
+                >
+                  {bridgeServers.map((server) => {
+                    const imported = importedBridgeIds.includes(server.id);
+                    return (
+                      <li
+                        key={server.id}
+                        className="flex items-center justify-between gap-3 rounded-xl bg-white/80 px-3 py-2 dark:bg-background/70"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-semibold text-gray-800 dark:text-foreground">
+                            {server.label}
+                          </p>
+                          <p className="truncate font-mono text-[10px] text-gray-500 dark:text-muted-foreground">
+                            {server.id}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleBridgeImport(server)}
+                          disabled={
+                            !isOnline || isLoading || isDiscovering || imported
+                          }
+                          aria-label={t("importBridgeServerAria", {
+                            label: server.label,
+                          })}
+                          className="flex shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {imported ? (
+                            <Check size={13} aria-hidden="true" />
+                          ) : (
+                            <Download size={13} aria-hidden="true" />
+                          )}
+                          {imported ? t("bridgeImported") : t("bridgeImport")}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </section>
+        )}
 
         <div className="space-y-4">
           <div className="space-y-2">
@@ -578,7 +1009,7 @@ const CustomMcpServerModal = ({
           <button
             type="button"
             onClick={handleClose}
-            disabled={isLoading}
+            disabled={isLoading || isDiscovering}
             className="rounded-lg px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 disabled:cursor-not-allowed disabled:opacity-60 dark:text-muted-foreground dark:hover:bg-muted"
           >
             {t("cancel")}
@@ -588,7 +1019,13 @@ const CustomMcpServerModal = ({
             aria-label={t("installCustomMcpAria")}
             aria-busy={isLoading || undefined}
             onClick={handleInstall}
-            disabled={isLoading || !name.trim() || !serverUrl.trim()}
+            disabled={
+              !isOnline ||
+              isLoading ||
+              isDiscovering ||
+              !name.trim() ||
+              !serverUrl.trim()
+            }
             className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isLoading ? (
@@ -1231,6 +1668,7 @@ const PluginMarket: React.FC<PluginMarketProps> = ({ onClose }) => {
     updatePluginConfig,
     togglePluginActive,
     pluginConfigs,
+    serverConfig,
     _hasHydrated,
   } = useSettingsStore();
 
@@ -1244,6 +1682,7 @@ const PluginMarket: React.FC<PluginMarketProps> = ({ onClose }) => {
   const [activeSource, setActiveSource] = useState<MarketSource>("plugins");
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [installingIds, setInstallingIds] = useState<string[]>([]);
   const [marketError, setMarketError] = useState<string | null>(null);
@@ -1255,6 +1694,8 @@ const PluginMarket: React.FC<PluginMarketProps> = ({ onClose }) => {
   const [showCustomPluginModal, setShowCustomPluginModal] = useState(false);
   const [showCustomMcpServerModal, setShowCustomMcpServerModal] =
     useState(false);
+  const [mcpPluginAwaitingAuth, setMcpPluginAwaitingAuth] =
+    useState<Plugin | null>(null);
   const [mcpPageCursors, setMcpPageCursors] = useState<string[]>([""]);
   const [mcpNextCursor, setMcpNextCursor] = useState("");
   const isMountedRef = useRef(true);
@@ -1283,6 +1724,17 @@ const PluginMarket: React.FC<PluginMarketProps> = ({ onClose }) => {
   }, []);
 
   useEffect(() => {
+    const updateOnlineStatus = () => setIsOnline(navigator.onLine);
+    updateOnlineStatus();
+    window.addEventListener("online", updateOnlineStatus);
+    window.addEventListener("offline", updateOnlineStatus);
+    return () => {
+      window.removeEventListener("online", updateOnlineStatus);
+      window.removeEventListener("offline", updateOnlineStatus);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!_hasHydrated) return;
     if (activeSource !== "plugins") return;
 
@@ -1290,6 +1742,11 @@ const PluginMarket: React.FC<PluginMarketProps> = ({ onClose }) => {
     if (cachedPlugins.length > 0) {
       setAvailablePlugins(cachedPlugins);
       setMarketLoadResult(undefined);
+      setIsLoading(false);
+      return;
+    }
+    if (!isOnline || !isBrowserOnline()) {
+      setAvailablePlugins([]);
       setIsLoading(false);
       return;
     }
@@ -1327,11 +1784,16 @@ const PluginMarket: React.FC<PluginMarketProps> = ({ onClose }) => {
       }
     };
     load();
-  }, [_hasHydrated, activeSource, t]);
+  }, [_hasHydrated, activeSource, isOnline, t]);
 
   useEffect(() => {
     if (!_hasHydrated) return;
     if (activeSource !== "mcp") return;
+    if (!isOnline || !isBrowserOnline()) {
+      setAvailablePlugins(getCachedMcpServers());
+      setIsLoading(false);
+      return;
+    }
 
     const load = async () => {
       const requestId = pluginListRequestRef.current + 1;
@@ -1372,9 +1834,21 @@ const PluginMarket: React.FC<PluginMarketProps> = ({ onClose }) => {
     };
 
     load();
-  }, [_hasHydrated, activeSource, currentPage, mcpPageCursors, searchTerm, t]);
+  }, [
+    _hasHydrated,
+    activeSource,
+    currentPage,
+    isOnline,
+    mcpPageCursors,
+    searchTerm,
+    t,
+  ]);
 
   const handleRefresh = async () => {
+    if (!isOnline || !isBrowserOnline()) {
+      setMarketError(t("offlineOperationsUnavailable"));
+      return;
+    }
     const requestId = pluginListRequestRef.current + 1;
     pluginListRequestRef.current = requestId;
     setIsRefreshing(true);
@@ -1428,29 +1902,76 @@ const PluginMarket: React.FC<PluginMarketProps> = ({ onClose }) => {
     }
   }, [searchTerm, selectedCategories, activeSource]);
 
-  const handleInstall = async (plugin: Plugin) => {
-    if (installingIdsRef.current.has(plugin.id)) return;
+  const installMarketplacePlugin = async (
+    plugin: Plugin,
+    authValue?: string,
+  ): Promise<string | null> => {
+    if (!isOnline || !isBrowserOnline()) {
+      const message = t("offlineOperationsUnavailable");
+      setMarketError(message);
+      return message;
+    }
+    if (installingIdsRef.current.has(plugin.id)) return null;
 
     installingIdsRef.current.add(plugin.id);
     setInstallingIds(Array.from(installingIdsRef.current));
     setMarketError(null);
     try {
-      const fullPlugin = await installPlugin(plugin);
+      const fullPlugin = await installPlugin(plugin, authValue);
+      const normalizedAuthValue = authValue?.trim();
+      const localValueSecret = normalizedAuthValue
+        ? await encryptLocalSecret(
+            normalizedAuthValue,
+            LOCAL_SECRET_CONTEXTS.pluginAuth(fullPlugin.id),
+          )
+        : undefined;
+
       if (isMountedRef.current) {
         addInstalledPlugin(fullPlugin);
+        if (localValueSecret) {
+          updatePluginConfig(fullPlugin.id, {
+            auth: {
+              type:
+                fullPlugin.auth?.type === "apiKey"
+                  ? "apiKey"
+                  : fullPlugin.auth?.type === "oauth2"
+                    ? "oauth2"
+                    : "bearer",
+              value: "",
+              localValueSecret,
+              key:
+                fullPlugin.auth?.name ||
+                (fullPlugin.auth?.type === "apiKey"
+                  ? "X-API-Key"
+                  : "Authorization"),
+              addTo: fullPlugin.auth?.in || "header",
+            },
+          });
+        }
       }
+      return null;
     } catch (error) {
+      const message =
+        error instanceof Error ? error.message : t("installFailed");
       if (isMountedRef.current) {
-        setMarketError(
-          error instanceof Error ? error.message : t("installFailed"),
-        );
+        setMarketError(message);
       }
+      return message;
     } finally {
       if (isMountedRef.current) {
         installingIdsRef.current.delete(plugin.id);
         setInstallingIds(Array.from(installingIdsRef.current));
       }
     }
+  };
+
+  const handleInstall = (plugin: Plugin) => {
+    if (plugin.source === "mcp" && isPluginAuthRequired(plugin)) {
+      setMcpPluginAwaitingAuth(plugin);
+      return;
+    }
+
+    void installMarketplacePlugin(plugin);
   };
 
   const handleCustomMcpInstalled = async (
@@ -1641,6 +2162,18 @@ const PluginMarket: React.FC<PluginMarketProps> = ({ onClose }) => {
         <CustomMcpServerModal
           onClose={() => setShowCustomMcpServerModal(false)}
           onInstall={handleCustomMcpInstalled}
+          bridgeDiscoveryEnabled={serverConfig?.deployment?.mode === "local"}
+          isOnline={isOnline}
+        />
+      )}
+
+      {mcpPluginAwaitingAuth && (
+        <McpInstallAuthModal
+          plugin={mcpPluginAwaitingAuth}
+          onClose={() => setMcpPluginAwaitingAuth(null)}
+          onInstall={(authValue) =>
+            installMarketplacePlugin(mcpPluginAwaitingAuth, authValue)
+          }
         />
       )}
 
@@ -1668,7 +2201,7 @@ const PluginMarket: React.FC<PluginMarketProps> = ({ onClose }) => {
             aria-label={t("refreshAria")}
             aria-busy={isRefreshing || undefined}
             onClick={handleRefresh}
-            disabled={isRefreshing}
+            disabled={!isOnline || isRefreshing}
             className="rounded-full p-2 text-gray-500 transition-colors hover:bg-gray-200/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 disabled:cursor-not-allowed disabled:opacity-50 dark:text-muted-foreground dark:hover:bg-accent/50"
           >
             <RefreshCw
@@ -1687,6 +2220,20 @@ const PluginMarket: React.FC<PluginMarketProps> = ({ onClose }) => {
           </button>
         </div>
       </div>
+
+      {!isOnline && (
+        <div
+          role="status"
+          className="mx-6 mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200"
+        >
+          <AlertTriangle
+            size={14}
+            className="mt-0.5 shrink-0"
+            aria-hidden="true"
+          />
+          <span>{t("offlineOperationsUnavailable")}</span>
+        </div>
+      )}
 
       {marketError ? (
         <div
@@ -1794,7 +2341,8 @@ const PluginMarket: React.FC<PluginMarketProps> = ({ onClose }) => {
                     ? setShowCustomMcpServerModal(true)
                     : setShowCustomPluginModal(true)
                 }
-                className="flex shrink-0 items-center gap-1 rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-600 transition-colors hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 dark:bg-blue-900/20 dark:text-blue-400 dark:hover:bg-blue-900/30"
+                disabled={!isOnline}
+                className="flex shrink-0 items-center gap-1 rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-600 transition-colors hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-900/20 dark:text-blue-400 dark:hover:bg-blue-900/30"
               >
                 <Plus size={14} aria-hidden="true" />{" "}
                 {activeSource === "mcp" ? t("customMcp") : t("custom")}
@@ -2066,7 +2614,9 @@ const PluginMarket: React.FC<PluginMarketProps> = ({ onClose }) => {
                             installingIds.includes(plugin.id) || undefined
                           }
                           onClick={() => handleInstall(plugin)}
-                          disabled={installingIds.includes(plugin.id)}
+                          disabled={
+                            !isOnline || installingIds.includes(plugin.id)
+                          }
                           className="group flex w-full items-center justify-center gap-2 rounded-xl border border-transparent bg-gray-50 py-2 text-xs font-medium text-gray-600 transition-[background-color,border-color,color] hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-accent/50 dark:text-foreground/85 dark:hover:border-blue-800 dark:hover:bg-blue-900/20 dark:hover:text-blue-400"
                         >
                           {installingIds.includes(plugin.id) ? (

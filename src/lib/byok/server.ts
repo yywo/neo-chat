@@ -200,8 +200,24 @@ export async function resolveProviderRuntimeConfig(
 ): Promise<ProviderRuntimeConfig> {
   if (provider.source === "server-default") {
     const defaultProvider = getDefaultProviderRuntimeConfig();
-    if (!defaultProvider) return provider;
-    return defaultProvider;
+    if (!defaultProvider) {
+      throw new ApiError(
+        "Server-default provider is unavailable",
+        503,
+        "SERVER_DEFAULT_PROVIDER_UNAVAILABLE",
+      );
+    }
+    if (provider.type !== defaultProvider.type) {
+      throw new ValidationError(
+        "Server-default provider type does not match this request",
+      );
+    }
+
+    const apiKey = await decryptOptionalSecret(
+      provider.apiKeySecret,
+      getProviderSecretContext(provider),
+    );
+    return apiKey ? { ...defaultProvider, apiKey } : defaultProvider;
   }
 
   const apiKey = await decryptOptionalSecret(

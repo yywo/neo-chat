@@ -15,5 +15,12 @@
   "capabilityUnsupportedModel": "選択したモデルは内蔵検索を利用できません。外部検索プロバイダーを選択してください。",
   "capabilityMissingBaseUrl": "{provider} には Base URL が必要です。",
   "capabilityMissingKey": "{provider} には API キーが必要です。",
-  "resultLimit": "検索結果の上限"
+  "resultLimit": "検索結果の上限",
+  "timeRange": "期間",
+  "timeRangeAny": "指定なし",
+  "timeRangeDay": "過去 24 時間",
+  "timeRangeWeek": "過去 1 週間",
+  "timeRangeMonth": "過去 1 か月",
+  "timeRangeYear": "過去 1 年",
+  "timeRangeHint": "期間を明示的に選択した場合のみ、Firecrawl が結果を絞り込みます。"
 }

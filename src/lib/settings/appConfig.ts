@@ -71,6 +71,10 @@ export function normalizeChatConfig(config: unknown): ChatConfig {
       typeof raw.useSearch === "boolean"
         ? raw.useSearch
         : DEFAULT_CHAT_CONFIG.useSearch,
+    useAgentMode:
+      typeof raw.useAgentMode === "boolean"
+        ? raw.useAgentMode
+        : DEFAULT_CHAT_CONFIG.useAgentMode,
     useReasoning: isReasoningEnabled(reasoningMode),
     reasoningMode,
     useRAG:
@@ -103,6 +107,10 @@ export function normalizeSystemSettings(
       raw.personality,
       defaults.personality,
     ),
+    enableAutoScroll:
+      typeof raw.enableAutoScroll === "boolean"
+        ? raw.enableAutoScroll
+        : defaults.enableAutoScroll,
     enableAutoTitle:
       typeof raw.enableAutoTitle === "boolean"
         ? raw.enableAutoTitle
@@ -126,6 +134,22 @@ export function normalizeSystemSettings(
       SYSTEM_SETTINGS_LIMITS.minHistoryKeepCount,
       SYSTEM_SETTINGS_LIMITS.maxHistoryKeepCount,
       defaults.historyKeepCount,
+    ),
+    enableAutoImageCompression:
+      typeof raw.enableAutoImageCompression === "boolean"
+        ? raw.enableAutoImageCompression
+        : defaults.enableAutoImageCompression,
+    imageCompressionMaxSizeMB: clampNumber(
+      raw.imageCompressionMaxSizeMB,
+      SYSTEM_SETTINGS_LIMITS.minImageCompressionMaxSizeMB,
+      SYSTEM_SETTINGS_LIMITS.maxImageCompressionMaxSizeMB,
+      defaults.imageCompressionMaxSizeMB,
+    ),
+    imageCompressionMaxWidthOrHeight: clampInteger(
+      raw.imageCompressionMaxWidthOrHeight,
+      SYSTEM_SETTINGS_LIMITS.minImageCompressionMaxWidthOrHeight,
+      SYSTEM_SETTINGS_LIMITS.maxImageCompressionMaxWidthOrHeight,
+      defaults.imageCompressionMaxWidthOrHeight,
     ),
     enableCodeCollapse:
       typeof raw.enableCodeCollapse === "boolean"

@@ -97,6 +97,29 @@ describe("market plugin normalization", () => {
     });
   });
 
+  it("preserves legacy SSE transport metadata", () => {
+    expect(
+      normalizeMarketPlugin({
+        id: "mcp:legacy:1.0.0",
+        source: "mcp",
+        title: "Legacy MCP",
+        manifestUrl: "",
+        mcp: {
+          transport: "sse",
+          serverUrl: "https://mcp.example.com/sse",
+          serverName: "legacy",
+          toolNameMap: {},
+        },
+      }),
+    ).toMatchObject({
+      source: "mcp",
+      mcp: {
+        transport: "sse",
+        serverUrl: "https://mcp.example.com/sse",
+      },
+    });
+  });
+
   it("keeps root-relative plugin logos for local default assets", () => {
     expect(
       normalizeMarketPlugin({

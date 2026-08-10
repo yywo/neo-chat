@@ -244,12 +244,26 @@ export async function stripAttachmentsDisplayCacheForModel(
   );
 }
 
+function stripToolCallResultImagesForModel(
+  toolCall: NonNullable<Message["toolCalls"]>[number],
+) {
+  const stripped = { ...toolCall };
+  delete stripped.resultImages;
+  return stripped;
+}
+
 async function stripOutputBlockDisplayCacheForModel(
   block: MessageOutputBlock,
   options: {
     resolveOPFSBlob?: ResolveOPFSBlob;
   },
 ): Promise<MessageOutputBlock> {
+  if (block.type === "tool_group") {
+    return {
+      ...block,
+      toolCalls: block.toolCalls.map(stripToolCallResultImagesForModel),
+    };
+  }
   if (block.type !== "image") return block;
 
   return {
@@ -276,10 +290,12 @@ export async function stripMessageDisplayCacheForModel(
         )
       : Promise.resolve(undefined),
   ]);
+  const toolCalls = message.toolCalls?.map(stripToolCallResultImagesForModel);
 
   return {
     ...message,
     ...(attachments ? { attachments } : {}),
+    ...(toolCalls ? { toolCalls } : {}),
     ...(outputBlocks ? { outputBlocks } : {}),
   };
 }

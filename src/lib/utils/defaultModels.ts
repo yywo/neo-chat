@@ -2,10 +2,10 @@ import type { DefaultModels, ModelProvider } from "@/types";
 
 function getAvailableModelIds(providers: ModelProvider[]): Set<string> {
   return new Set(
-    providers
+    (providers || [])
       .filter((provider) => provider.enabled)
       .flatMap((provider) =>
-        provider.models.map((model) => `${provider.id}:${model}`),
+        (provider.models || []).map((model) => `${provider.id}:${model}`),
       ),
   );
 }
@@ -16,10 +16,10 @@ export function getDefaultModelSelectValue(
   providers: ModelProvider[],
 ): string {
   const configured = defaultModels[task];
-  const availableModels = providers
+  const availableModels = (providers || [])
     .filter((provider) => provider.enabled)
     .flatMap((provider) =>
-      provider.models.map((model) => ({
+      (provider.models || []).map((model) => ({
         fullId: `${provider.id}:${model}`,
         modelName: model,
       })),

@@ -200,11 +200,23 @@ the chat. See
 boundaries, context budgeting, and recovery behavior.
 
 Remote MCP servers use the same server-registered plugin path and outbound URL
-policy. Neo Chat v1 supports remote `streamable-http` MCP over HTTP or HTTPS,
-including localhost and private-network targets. The official Registry remains
-HTTPS-only. Hosted or multi-instance deployments should configure
+policy. Neo Chat supports `streamable-http` and legacy `sse` MCP over HTTP or
+HTTPS, including localhost and private-network targets. Streamable HTTP is
+preferred when both are available. Local Docker deployments may opt into the
+isolated [stdio bridge](mcp-stdio-bridge.md); hosted and Worker deployments must
+not run it. The official Registry remains HTTPS-only. Hosted or
+multi-instance deployments should configure
 `PLUGIN_REGISTRY_STORE=upstash` so installed MCP tools resolve consistently
 across instances.
+
+The stdio bridge's child environment allowlist prevents accidental variable
+inheritance, but it is not an adversarial process boundary: bridge and children
+usually share one container UID and same-UID `/proc` visibility. Run only
+fully trusted and audited commands, and never inject unrelated secrets into the
+bridge container. Strong isolation requires per-server containers, distinct
+UIDs, `/proc` isolation, and a separate secret broker. The bridge container is
+memory/PID bounded, and its transport rejects oversized or unterminated raw
+stdio frames before JSON parsing as well as enforcing the parsed-result limit.
 
 ## Deployment Health
 

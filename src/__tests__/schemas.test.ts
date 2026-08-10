@@ -97,7 +97,7 @@ describe("api schemas", () => {
     expect(message.toolCalls?.[0]?.status).toBe("success");
   });
 
-  it("accepts skill invocation descriptions in chat history", () => {
+  it("accepts strict v2 skill invocation metadata in chat history", () => {
     expect(() =>
       ChatRequestSchema.parse({
         provider: { type: "Gemini", apiKeySecret: encryptedSecret },
@@ -114,6 +114,11 @@ describe("api schemas", () => {
                   "Translate and localize text between Chinese and English.",
                 category: "writing",
                 mode: "manual",
+                schemaVersion: 2,
+                definitionHash: "fnv1a-1234abcd",
+                order: 0,
+                parameters: { audience: "operators" },
+                bundleId: "launch-brief",
               },
             ],
           },
@@ -121,6 +126,55 @@ describe("api schemas", () => {
         newMessage: "regenerate",
       }),
     ).not.toThrow();
+  });
+
+  it("rejects malformed or unknown skill invocation metadata", () => {
+    const invocation = {
+      id: "translation-localization",
+      title: "Translation & Localization",
+      category: "writing",
+      mode: "auto",
+      schemaVersion: 2,
+      definitionHash: "fnv1a-1234abcd",
+      order: 0,
+    };
+    const request = {
+      provider: { type: "Gemini", apiKeySecret: encryptedSecret },
+      modelName: "gemini-test",
+      history: [
+        {
+          role: "model",
+          content: "Translated text",
+          skillInvocations: [invocation],
+        },
+      ],
+      newMessage: "regenerate",
+    };
+
+    expect(() =>
+      ChatRequestSchema.parse({
+        ...request,
+        history: [
+          {
+            ...request.history[0],
+            skillInvocations: [
+              { ...invocation, definitionHash: "sha256-not-supported" },
+            ],
+          },
+        ],
+      }),
+    ).toThrow();
+    expect(() =>
+      ChatRequestSchema.parse({
+        ...request,
+        history: [
+          {
+            ...request.history[0],
+            skillInvocations: [{ ...invocation, unexpected: true }],
+          },
+        ],
+      }),
+    ).toThrow();
   });
 
   it("rejects native search in the external search route schema", () => {
@@ -273,10 +327,18 @@ describe("api schemas", () => {
     expect(
       ChatRequestSchema.parse({
         ...baseRequest,
-        config: { reasoningMode: "auto", imageCount: 3 },
+        config: {
+          reasoningMode: "auto",
+          imageCount: 3,
+          useAgentMode: true,
+        },
       }),
     ).toMatchObject({
-      config: { reasoningMode: "auto", imageCount: 3 },
+      config: {
+        reasoningMode: "auto",
+        imageCount: 3,
+        useAgentMode: true,
+      },
     });
 
     expect(() =>
@@ -290,6 +352,13 @@ describe("api schemas", () => {
       ChatRequestSchema.parse({
         ...baseRequest,
         config: { imageCount: 5 },
+      }),
+    ).toThrow();
+
+    expect(() =>
+      ChatRequestSchema.parse({
+        ...baseRequest,
+        config: { useAgentMode: "yes" },
       }),
     ).toThrow();
   });

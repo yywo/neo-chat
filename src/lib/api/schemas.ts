@@ -159,6 +159,12 @@ const MessageMemoryContextSchema = z.object({
   createdAt: z.number().optional(),
 });
 
+const SkillInvocationParametersSchema = z
+  .record(z.string().regex(/^[a-z][a-z0-9_]{0,39}$/), z.string().max(20_000))
+  .refine((parameters) => Object.keys(parameters).length <= 20, {
+    message: "Too many skill invocation parameters",
+  });
+
 export const SkillInvocationSchema = z
   .object({
     id: z
@@ -170,6 +176,19 @@ export const SkillInvocationSchema = z
     description: z.string().max(2_048).optional(),
     category: z.string().min(1).max(120),
     mode: z.enum(["manual", "auto"]),
+    schemaVersion: z.literal(2).optional(),
+    definitionHash: z
+      .string()
+      .regex(/^fnv1a-[0-9a-f]{8}$/)
+      .optional(),
+    order: z.number().int().min(0).max(19).optional(),
+    parameters: SkillInvocationParametersSchema.optional(),
+    bundleId: z
+      .string()
+      .min(1)
+      .max(160)
+      .regex(/^[A-Za-z0-9_-]+$/)
+      .optional(),
   })
   .strict();
 
@@ -234,6 +253,7 @@ export const ChatRequestSchema = z
         useReasoning: z.boolean().optional(),
         reasoningMode: ReasoningModeSchema.optional(),
         useSearch: z.boolean().optional(),
+        useAgentMode: z.boolean().optional(),
         useRAG: z.boolean().optional(),
         imageCount: z
           .number()
@@ -352,7 +372,8 @@ const PluginSchema = z
     source: z.enum(["builtin", "openapi", "mcp"]).optional(),
     mcp: z
       .object({
-        transport: z.literal("streamable-http"),
+        transport: z.enum(["streamable-http", "sse"]),
+        source: z.enum(["registry", "custom", "bridge"]).optional(),
         serverUrl: z.string().min(1).max(2_048),
         serverName: z.string().min(1).max(300),
         serverVersion: z.string().max(120).optional(),
@@ -443,6 +464,13 @@ export const PluginInstallSchema = z
   })
   .strict();
 
+export const McpBridgeDiscoveryRequestSchema = z
+  .object({
+    manifestUrl: z.string().min(1).max(2_048),
+    tokenSecret: EncryptedSecretEnvelopeSchema,
+  })
+  .strict();
+
 export const SearchRequestSchema = z
   .object({
     provider: z.enum([
@@ -455,6 +483,7 @@ export const SearchRequestSchema = z
     ]),
     query: z.string().min(1).max(4_000),
     scope: z.string().max(100).optional(),
+    timeRange: z.enum(["any", "day", "week", "month", "year"]).optional(),
     config: z
       .object({
         apiKey: z.unknown().optional(),

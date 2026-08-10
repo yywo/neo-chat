@@ -1,8 +1,10 @@
 import { PLUGIN_EXECUTION_LIMITS } from "@/config/limits";
+import type { McpTransport } from "../plugin/types";
 import { callMcpTool, type McpAuthConfig } from "./client";
 
 export interface ExecuteMcpToolRequestOptions {
   serverUrl: string;
+  transport?: McpTransport;
   toolName: string;
   args: Record<string, unknown>;
   authConfig?: McpAuthConfig;
@@ -74,6 +76,7 @@ export async function executeMcpToolRequest(
 ): Promise<unknown> {
   const result = await callMcpTool({
     serverUrl: options.serverUrl,
+    transport: options.transport,
     toolName: options.toolName,
     args: options.args,
     timeoutMs: options.timeoutMs,

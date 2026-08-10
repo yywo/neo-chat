@@ -8,6 +8,7 @@ import type {
   ToolConfirmationController,
   ToolConfirmationDecision,
 } from "../types";
+import { createKnowledgeCollectionAttachment } from "../lib/utils/knowledgeAttachments";
 
 const mocks = vi.hoisted(() => ({
   executePluginFunction: vi.fn(),
@@ -19,6 +20,8 @@ const mocks = vi.hoisted(() => ({
     () => false,
   ),
   supportsTextOutput: vi.fn<(metadata?: ModelMetadata) => boolean>(() => true),
+  supportsToolCalls: vi.fn<(metadata?: ModelMetadata) => boolean>(() => true),
+  retrieveKnowledgeSources: vi.fn(),
 }));
 
 vi.mock("@/utils/pluginUtils", () => ({
@@ -94,8 +97,27 @@ vi.mock("@/lib/utils/model", () => ({
     const [providerId, modelName] = model.split(":");
     return { providerId, modelName };
   }),
+  resolveProviderModelMetadata: vi.fn(
+    ({
+      providerId,
+      modelName,
+      modelMetadata,
+      customModelMetadata,
+    }: {
+      providerId?: string;
+      modelName: string;
+      modelMetadata?: Record<string, ModelMetadata>;
+      customModelMetadata?: Record<string, ModelMetadata>;
+    }) =>
+      (providerId
+        ? customModelMetadata?.[`${providerId}:${modelName}`]
+        : undefined) ||
+      customModelMetadata?.[modelName] ||
+      modelMetadata?.[modelName],
+  ),
   supportsImageGeneration: mocks.supportsImageGeneration,
   supportsTextOutput: mocks.supportsTextOutput,
+  supportsToolCalls: mocks.supportsToolCalls,
 }));
 
 vi.mock("@/lib/settings/searchRag", () => ({
@@ -137,6 +159,10 @@ vi.mock("@/lib/utils/devLogger", () => ({
 
 vi.mock("../services/api/searchService", () => ({
   createSearchProvider: vi.fn(),
+}));
+
+vi.mock("@/lib/knowledge/retrieveKnowledgeSources", () => ({
+  retrieveKnowledgeSources: mocks.retrieveKnowledgeSources,
 }));
 
 import { createSearchProvider } from "../services/api/searchService";
@@ -236,6 +262,24 @@ const writePlugin: Plugin = {
   ],
 };
 
+const memoryNamedPlugin: Plugin = {
+  id: "memory-plugin",
+  title: "Memory Plugin",
+  description: "Provides a plugin-owned memory search function",
+  logoUrl: "",
+  manifestUrl: "",
+  baseUrl: "https://example.com",
+  functions: [
+    {
+      name: "memory_search",
+      description: "Search plugin memory",
+      method: "GET",
+      path: "/memory",
+      parameters: { type: "object", properties: {} },
+    },
+  ],
+};
+
 const destructivePlugin: Plugin = {
   ...writePlugin,
   functions: [
@@ -325,6 +369,9 @@ describe("chat service tool execution", () => {
     mocks.supportsImageGeneration.mockReturnValue(false);
     mocks.supportsTextOutput.mockReset();
     mocks.supportsTextOutput.mockReturnValue(true);
+    mocks.supportsToolCalls.mockReset();
+    mocks.supportsToolCalls.mockReturnValue(true);
+    mocks.retrieveKnowledgeSources.mockReset();
     mocks.searchCompatibility = { enabled: true, mode: "native" };
     vi.mocked(createSearchProvider).mockReset();
   });
@@ -383,6 +430,155 @@ describe("chat service tool execution", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a plugin-owned memory_search available when no built-in binding was collected", async () => {
+    mocks.settingsState = {
+      ...mocks.settingsState,
+      installedPlugins: [memoryNamedPlugin],
+    };
+    mocks.executePluginFunction.mockResolvedValueOnce({ source: "plugin" });
+
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async (_url, init) => {
+        const body = JSON.parse(String(init?.body));
+        expect(body.tools.map((tool: any) => tool.function.name)).toContain(
+          "memory_search",
+        );
+        return sseResponse([
+          {
+            type: "tool_call",
+            toolCall: {
+              id: "call_plugin_memory",
+              name: "memory_search",
+              args: { query: "document parser" },
+              status: "pending",
+            },
+          },
+          { type: "done" },
+        ]);
+      })
+      .mockImplementationOnce(async () =>
+        sseResponse([
+          { type: "content", content: "Plugin memory searched." },
+          { type: "done" },
+        ]),
+      );
+
+    const { streamChatResponse } = await import("../services/api/chatService");
+    const result = await streamChatResponse(
+      "session-1",
+      "openai:gpt-4",
+      [],
+      "Search the plugin memory",
+      [],
+      {},
+      () => undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      ["memory-plugin"],
+    );
+
+    expect(result).toBe("Plugin memory searched.");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(mocks.executePluginFunction).toHaveBeenCalledWith(
+      "memory_search",
+      { query: "document parser" },
+      undefined,
+      ["memory-plugin"],
+      undefined,
+      expect.objectContaining({
+        pluginId: "memory-plugin",
+        risk: "read",
+      }),
+    );
+  });
+
+  it("rejects plugin functions omitted from the request tool snapshot", async () => {
+    const widePlugin: Plugin = {
+      id: "wide-plugin",
+      title: "Wide Plugin",
+      description: "Exposes more functions than one request may offer",
+      logoUrl: "",
+      manifestUrl: "",
+      baseUrl: "https://example.com",
+      functions: Array.from({ length: 65 }, (_, index) => ({
+        name: `wide_tool_${index}`,
+        description: `Wide tool ${index}`,
+        method: "GET",
+        path: `/tools/${index}`,
+        parameters: { type: "object", properties: {} },
+      })),
+    };
+    mocks.settingsState = {
+      ...mocks.settingsState,
+      installedPlugins: [widePlugin],
+    };
+    const toolUpdates: ToolCall[][] = [];
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async (_url, init) => {
+        const body = JSON.parse(String(init?.body));
+        const offeredNames = body.tools.map((tool: any) => tool.function.name);
+        expect(offeredNames).toHaveLength(64);
+        expect(offeredNames).not.toContain("wide_tool_64");
+        return sseResponse([
+          {
+            type: "tool_call",
+            toolCall: {
+              id: "call_omitted",
+              name: "wide_tool_64",
+              args: {},
+              status: "pending",
+            },
+          },
+          { type: "done" },
+        ]);
+      })
+      .mockImplementationOnce(async () =>
+        sseResponse([
+          { type: "content", content: "The unavailable tool was rejected." },
+          { type: "done" },
+        ]),
+      );
+
+    const { streamChatResponse } = await import("../services/api/chatService");
+    const result = await streamChatResponse(
+      "session-1",
+      "openai:gpt-4",
+      [],
+      "Call the omitted tool.",
+      [],
+      {},
+      () => undefined,
+      undefined,
+      undefined,
+      (toolCalls) => toolUpdates.push(toolCalls),
+      undefined,
+      undefined,
+      undefined,
+      ["wide-plugin"],
+    );
+
+    expect(result).toBe("The unavailable tool was rejected.");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(mocks.executePluginFunction).not.toHaveBeenCalled();
+    expect(toolUpdates.flat()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "call_omitted",
+          status: "error",
+          errorInfo: expect.objectContaining({
+            code: "TOOL_FUNCTION_NOT_FOUND",
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("executes explicit memory_search as an internal tool before plugin tools", async () => {
     const markMemoriesUsed = vi.fn();
     mocks.memoryState = {
@@ -408,6 +604,10 @@ describe("chat service tool execution", () => {
         },
       ],
       markMemoriesUsed,
+    };
+    mocks.settingsState = {
+      ...mocks.settingsState,
+      installedPlugins: [memoryNamedPlugin],
     };
 
     const fetchMock = vi
@@ -451,6 +651,10 @@ describe("chat service tool execution", () => {
       undefined,
       undefined,
       (toolCalls) => updates.push(toolCalls),
+      undefined,
+      undefined,
+      undefined,
+      ["memory-plugin"],
     );
 
     expect(result).toBe("Mineru stays the default.");
@@ -1193,22 +1397,18 @@ describe("chat service tool execution", () => {
     );
   });
 
-  it("does not render image plugin results as visible output image blocks", async () => {
+  it("routes image plugin results to model attachments and visible output blocks", async () => {
     mocks.settingsState = {
       ...mocks.settingsState,
       installedPlugins: [imagePlugin],
     };
     mocks.executePluginFunction.mockResolvedValueOnce({
       imageBase64: "aW1hZ2U=",
-      images: [
-        {
-          imageBase64: "aW1hZ2U=",
-          mimeType: "image/png",
-        },
-      ],
-      revisedPrompt: "Edited prompt",
+      imageUrl: null,
+      imageCount: 1,
+      revisedPrompt: null,
       raw: {
-        data: [{ b64_json: "aW1hZ2U=", revised_prompt: "Edited prompt" }],
+        data: [{ b64_json: "aW1hZ2U=" }],
       },
     });
     const fetchMock = vi
@@ -1271,23 +1471,46 @@ describe("chat service tool execution", () => {
         ),
       ),
     ).toBe(true);
+    const imageToolCall = outputSnapshots
+      .flat()
+      .flatMap((block) => (block.type === "tool_group" ? block.toolCalls : []))
+      .find(
+        (toolCall) =>
+          toolCall.id === "call_image" && toolCall.resultImages?.length,
+      );
+    expect(imageToolCall).toMatchObject({
+      resultImages: [
+        expect.objectContaining({
+          mimeType: "image/png",
+          data: "aW1hZ2U=",
+          fileName: "plugin-image.png",
+        }),
+      ],
+    });
     expect(outputSnapshots.flat().some((block) => block.type === "image")).toBe(
       false,
     );
     const followUpBody = JSON.parse(
       String((fetchMock.mock.calls[1]?.[1] as RequestInit).body),
     );
+    expect(followUpBody.attachments).toEqual([
+      expect.objectContaining({
+        mimeType: "image/png",
+        data: "aW1hZ2U=",
+        fileName: "plugin-image.png",
+      }),
+    ]);
+    expect(followUpBody.newMessage).toContain("attached image outputs");
     const toolResult = followUpBody.history?.[1]?.toolCalls?.[0]
       ?.result as Record<string, unknown>;
     expect(toolResult).toEqual({
       imageUrl: null,
       imageBase64: "[image omitted]",
       imageCount: 1,
-      revisedPrompt: "Edited prompt",
+      revisedPrompt: null,
     });
     expect(JSON.stringify(followUpBody.history)).not.toContain("aW1hZ2U=");
     expect(toolResult).not.toHaveProperty("raw");
-    expect(toolResult).not.toHaveProperty("images");
   });
 
   it("emits one error output transition when tool execution fails", async () => {
@@ -1797,6 +2020,470 @@ describe("chat service tool execution", () => {
       isSearching: false,
       hasResults: false,
     });
+  });
+
+  it("defers external search and disables native search flags in effective Agent mode", async () => {
+    mocks.searchCompatibility = { enabled: true, mode: "external" };
+    mocks.settingsState = {
+      ...mocks.settingsState,
+      search: {
+        provider: "tavily",
+        configs: { tavily: { apiKey: "search" } },
+      },
+    };
+    const searchStatuses: boolean[] = [];
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async (_url, init) => {
+        const body = JSON.parse(String(init?.body));
+        expect(body.config.useAgentMode).toBe(true);
+        expect(body.enableGoogleSearch).toBe(false);
+        expect(body.enableOpenAIWebSearch).toBe(false);
+        expect(body.tools.map((tool: any) => tool.function.name)).toEqual([
+          "update_task_plan",
+          "web_search",
+          "run_javascript",
+        ]);
+        expect(body.systemInstruction).toContain("<agent-mode>");
+        expect(body.systemInstruction).toContain("update_task_plan");
+        return sseResponse([
+          { type: "content", content: "Agent response" },
+          { type: "done" },
+        ]);
+      });
+
+    const { streamChatResponse } = await import("../services/api/chatService");
+    const result = await streamChatResponse(
+      "session-1",
+      "openai:gpt-4",
+      [],
+      "Find current docs.",
+      [],
+      { useSearch: true, useAgentMode: true },
+      () => undefined,
+      undefined,
+      (isSearching) => searchStatuses.push(isSearching),
+    );
+
+    expect(result).toBe("Agent response");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(createSearchProvider).not.toHaveBeenCalled();
+    expect(searchStatuses).toEqual([]);
+  });
+
+  it("clamps Agent mode when the selected model cannot call tools", async () => {
+    mocks.supportsToolCalls.mockReturnValue(false);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async (_url, init) => {
+        const body = JSON.parse(String(init?.body));
+        expect(body.config.useAgentMode).toBe(false);
+        expect(body.tools).toEqual([]);
+        return sseResponse([
+          { type: "content", content: "Ordinary response" },
+          { type: "done" },
+        ]);
+      });
+
+    const { streamChatResponse } = await import("../services/api/chatService");
+    const result = await streamChatResponse(
+      "session-1",
+      "openai:gpt-4",
+      [],
+      "Hello",
+      [],
+      { useAgentMode: true },
+      () => undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      ["writer"],
+    );
+
+    expect(result).toBe("Ordinary response");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto-executes Agent task-plan updates through the shared tool loop", async () => {
+    const outputSnapshots: MessageOutputBlock[][] = [];
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async () =>
+        sseResponse([
+          {
+            type: "tool_call",
+            toolCall: {
+              id: "call_plan",
+              name: "update_task_plan",
+              args: {
+                steps: [
+                  { title: "Inspect", status: "completed" },
+                  { title: "Implement", status: "in_progress" },
+                ],
+              },
+              status: "pending",
+            },
+          },
+          { type: "done" },
+        ]),
+      )
+      .mockImplementationOnce(async () =>
+        sseResponse([
+          { type: "content", content: "Working through the plan." },
+          { type: "done" },
+        ]),
+      );
+
+    const { streamChatResponse } = await import("../services/api/chatService");
+    const result = await streamChatResponse(
+      "session-1",
+      "openai:gpt-4",
+      [],
+      "Handle this multi-step task.",
+      [],
+      { useAgentMode: true },
+      () => undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      (blocks) => outputSnapshots.push(blocks),
+    );
+
+    expect(result).toBe("Working through the plan.");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(outputSnapshots.at(-1)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "task_plan",
+          steps: [
+            { title: "Inspect", status: "completed" },
+            { title: "Implement", status: "in_progress" },
+          ],
+        }),
+        expect.objectContaining({
+          type: "tool_group",
+          toolCalls: [
+            expect.objectContaining({
+              name: "update_task_plan",
+              status: "success",
+              risk: "read",
+            }),
+          ],
+        }),
+      ]),
+    );
+  });
+
+  it("streams Agent web-search results through the existing citation channel", async () => {
+    mocks.searchCompatibility = { enabled: true, mode: "external" };
+    mocks.settingsState = {
+      ...mocks.settingsState,
+      search: {
+        provider: "firecrawl",
+        configs: { firecrawl: {} },
+      },
+    };
+    vi.mocked(createSearchProvider).mockResolvedValue({
+      sources: [
+        {
+          title: "Release notes",
+          url: "https://example.com/releases",
+          content: "Current release details",
+        },
+      ],
+      images: [],
+    });
+    const searchStatuses: Array<{
+      active: boolean;
+      sourceCount: number;
+    }> = [];
+    const outputSnapshots: MessageOutputBlock[][] = [];
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async () =>
+        sseResponse([
+          {
+            type: "tool_call",
+            toolCall: {
+              id: "call_search",
+              name: "web_search",
+              args: { query: "current release notes", max_results: 3 },
+              status: "pending",
+            },
+          },
+          { type: "done" },
+        ]),
+      )
+      .mockImplementationOnce(async () =>
+        sseResponse([
+          { type: "content", content: "See the release notes [^1]." },
+          { type: "done" },
+        ]),
+      );
+
+    const { streamChatResponse } = await import("../services/api/chatService");
+    await streamChatResponse(
+      "session-1",
+      "openai:gpt-4",
+      [],
+      "Find current release notes.",
+      [],
+      { useAgentMode: true, useSearch: true },
+      () => undefined,
+      undefined,
+      (active, results) =>
+        searchStatuses.push({
+          active,
+          sourceCount: results?.sources.length || 0,
+        }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      (blocks) => outputSnapshots.push(blocks),
+    );
+
+    expect(createSearchProvider).toHaveBeenCalledWith(
+      { query: "current release notes", maxResults: 3 },
+      undefined,
+    );
+    expect(searchStatuses).toEqual([
+      { active: true, sourceCount: 0 },
+      { active: false, sourceCount: 1 },
+    ]);
+    expect(outputSnapshots.at(-1)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "search",
+          isSearching: false,
+          sources: [
+            expect.objectContaining({
+              url: "https://example.com/releases",
+            }),
+          ],
+        }),
+      ]),
+    );
+  });
+
+  it("keeps concurrent Agent search citations in provider tool-call order", async () => {
+    mocks.searchCompatibility = { enabled: true, mode: "external" };
+    mocks.settingsState = {
+      ...mocks.settingsState,
+      search: {
+        provider: "firecrawl",
+        configs: { firecrawl: {} },
+      },
+    };
+    let resolveFirst:
+      ((value: { sources: any[]; images: any[] }) => void) | undefined;
+    let resolveSecond:
+      ((value: { sources: any[]; images: any[] }) => void) | undefined;
+    vi.mocked(createSearchProvider).mockImplementation(({ query }) => {
+      return new Promise((resolve) => {
+        if (query === "first") resolveFirst = resolve;
+        else resolveSecond = resolve;
+      });
+    });
+    const searchSnapshots: Array<{ active: boolean; titles: string[] }> = [];
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async () =>
+        sseResponse([
+          {
+            type: "tool_call",
+            toolCall: {
+              id: "call_first",
+              name: "web_search",
+              args: { query: "first" },
+              status: "pending",
+            },
+          },
+          {
+            type: "tool_call",
+            toolCall: {
+              id: "call_second",
+              name: "web_search",
+              args: { query: "second" },
+              status: "pending",
+            },
+          },
+          { type: "done" },
+        ]),
+      )
+      .mockImplementationOnce(async () =>
+        sseResponse([
+          { type: "content", content: "Combined result." },
+          { type: "done" },
+        ]),
+      );
+
+    const { streamChatResponse } = await import("../services/api/chatService");
+    const responsePromise = streamChatResponse(
+      "session-1",
+      "openai:gpt-4",
+      [],
+      "Compare both searches.",
+      [],
+      { useAgentMode: true, useSearch: true },
+      () => undefined,
+      undefined,
+      (active, results) => {
+        searchSnapshots.push({
+          active,
+          titles: results?.sources.map((source) => source.title) || [],
+        });
+      },
+    );
+    await vi.waitFor(() => {
+      expect(createSearchProvider).toHaveBeenCalledTimes(2);
+    });
+    resolveSecond?.({
+      sources: [
+        {
+          title: "Second",
+          url: "https://example.com/second",
+          content: "Second result",
+        },
+      ],
+      images: [],
+    });
+    await vi.waitFor(() => {
+      expect(searchSnapshots.at(-1)).toEqual({
+        active: true,
+        titles: ["Second"],
+      });
+    });
+    resolveFirst?.({
+      sources: [
+        {
+          title: "First",
+          url: "https://example.com/first",
+          content: "First result",
+        },
+      ],
+      images: [],
+    });
+    await responsePromise;
+
+    expect(searchSnapshots.at(-1)).toEqual({
+      active: false,
+      titles: ["First", "Second"],
+    });
+  });
+
+  it("keeps concurrent Agent knowledge citations in provider tool-call order", async () => {
+    let resolveFirst: ((value: { sources: any[] }) => void) | undefined;
+    let resolveSecond: ((value: { sources: any[] }) => void) | undefined;
+    mocks.retrieveKnowledgeSources.mockImplementation(
+      ({ queries }: { queries: string[] }) =>
+        new Promise<{ sources: any[] }>((resolve) => {
+          if (queries[0] === "first") resolveFirst = resolve;
+          else resolveSecond = resolve;
+        }),
+    );
+    const knowledgeSnapshots: string[][] = [];
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async () =>
+        sseResponse([
+          {
+            type: "tool_call",
+            toolCall: {
+              id: "knowledge_first",
+              name: "search_knowledge",
+              args: { query: "first" },
+              status: "pending",
+            },
+          },
+          {
+            type: "tool_call",
+            toolCall: {
+              id: "knowledge_second",
+              name: "search_knowledge",
+              args: { query: "second" },
+              status: "pending",
+            },
+          },
+          { type: "done" },
+        ]),
+      )
+      .mockImplementationOnce(async () =>
+        sseResponse([
+          { type: "content", content: "Combined knowledge." },
+          { type: "done" },
+        ]),
+      );
+
+    const { streamChatResponse } = await import("../services/api/chatService");
+    const responsePromise = streamChatResponse(
+      "session-1",
+      "openai:gpt-4",
+      [],
+      "Compare both knowledge searches.",
+      [],
+      { useAgentMode: true },
+      () => undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        knowledgeScope: {
+          attachments: [
+            createKnowledgeCollectionAttachment({
+              collectionId: "collection-1",
+              collectionName: "Docs",
+            }),
+          ],
+          collections: [{ id: "collection-1" }] as any,
+          ragConfig: { enabled: false },
+        },
+        onKnowledgeSources: (sources) => {
+          knowledgeSnapshots.push(sources.map((source) => source.title));
+        },
+      },
+    );
+    await vi.waitFor(() => {
+      expect(mocks.retrieveKnowledgeSources).toHaveBeenCalledTimes(2);
+    });
+    resolveSecond?.({
+      sources: [
+        {
+          title: "Second",
+          url: "knowledge://collection-1/second",
+          content: "Second result",
+        },
+      ],
+    });
+    await vi.waitFor(() => {
+      expect(knowledgeSnapshots.at(-1)).toEqual(["Second"]);
+    });
+    resolveFirst?.({
+      sources: [
+        {
+          title: "First",
+          url: "knowledge://collection-1/first",
+          content: "First result",
+        },
+      ],
+    });
+    await responsePromise;
+
+    expect(knowledgeSnapshots.at(-1)).toEqual(["First", "Second"]);
   });
 
   it("uses the centralized high tool-round limit before stopping recursive calls", async () => {

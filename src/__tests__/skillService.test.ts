@@ -385,7 +385,7 @@ describe("skill service", () => {
     expect(fetchMock).toHaveBeenCalled();
   });
 
-  it("injects all active installed skills without model selection when auto-select is disabled", async () => {
+  it("injects up to four ordered active skills without model selection when auto-select is disabled", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockImplementation(async (input) => {
@@ -425,15 +425,14 @@ describe("skill service", () => {
     expect(result.context).toContain("# Inactive Summary");
     expect(result.context).toContain("# Email Draft");
     expect(result.context).toContain("# Tone Adapter");
-    expect(result.context).toContain("# Privacy Redaction");
+    expect(result.context).not.toContain("# Privacy Redaction");
     expect(result.appliedSkills).toMatchObject([
       { mode: "manual", skill: { id: "translation-localization" } },
       { mode: "manual", skill: { id: "inactive-summary" } },
       { mode: "manual", skill: { id: "email-draft" } },
       { mode: "manual", skill: { id: "tone-adapter" } },
-      { mode: "manual", skill: { id: "privacy-redaction" } },
     ]);
-    expect(result.invocations).toEqual([
+    expect(result.invocations).toMatchObject([
       {
         id: "translation-localization",
         title: "翻译与本地化",
@@ -462,14 +461,11 @@ describe("skill service", () => {
         category: "writing",
         mode: "manual",
       },
-      {
-        id: "privacy-redaction",
-        title: "Privacy Redaction",
-        description: "Redact sensitive details.",
-        category: "safety",
-        mode: "manual",
-      },
     ]);
+    expect(result.invocations).toHaveLength(4);
+    expect(result.invocations.every((item) => item.schemaVersion === 2)).toBe(
+      true,
+    );
     expect(fetchMock).not.toHaveBeenCalled();
     expect(chatServiceMock.streamGenerateToolCall).not.toHaveBeenCalled();
   });
@@ -554,7 +550,7 @@ describe("skill service", () => {
     expect(JSON.stringify(tools)).not.toContain("inactive-summary");
     expect(result.context).toContain("# 翻译与本地化");
     expect(result.context).not.toContain("# Inactive Summary");
-    expect(result.invocations).toEqual([
+    expect(result.invocations).toMatchObject([
       {
         id: "translation-localization",
         title: "翻译与本地化",

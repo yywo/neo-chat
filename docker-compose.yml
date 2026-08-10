@@ -2,6 +2,8 @@ services:
   neo-chat:
     build:
       context: .
+      args:
+        NEXT_DEPLOYMENT_ID: ${NEXT_DEPLOYMENT_ID:-}
     image: neo-chat:local
     ports:
       - "3000:3000"
@@ -34,3 +36,42 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  mcp-bridge:
+    profiles: ["mcp"]
+    build:
+      context: .
+      dockerfile: docker/mcp-bridge/Dockerfile
+    image: neo-chat-mcp-bridge:local
+    init: true
+    ports:
+      - "127.0.0.1:${MCP_BRIDGE_PORT:-3400}:3400"
+    environment:
+      NODE_ENV: production
+      PORT: "3400"
+      HOST: "0.0.0.0"
+      MCP_BRIDGE_CONFIG: /config/servers.json
+      MCP_BRIDGE_TOKEN: ${MCP_BRIDGE_TOKEN:-}
+    volumes:
+      - ${MCP_BRIDGE_CONFIG_FILE:-./docker/mcp-bridge/servers.example.json}:/config/servers.json:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 256m
+    memswap_limit: 256m
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "fetch(''http://127.0.0.1:3400/health'').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"',
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

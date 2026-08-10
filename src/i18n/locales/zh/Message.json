@@ -37,6 +37,11 @@
   "tokenCount": "{count} 个 token",
   "previousVersion": "上一个版本",
   "nextVersion": "下一个版本",
+  "openBranchNavigator": "打开分支导航器",
+  "branchNavigatorTitle": "会话分支",
+  "branchRoleUser": "你",
+  "branchRoleAssistant": "助手",
+  "branchEmptyContent": "无文本内容",
   "retract": "撤回（编辑）",
   "stop": "停止",
   "readAloud": "朗读",
@@ -64,5 +69,13 @@
   "more": "更多",
   "skillAppliedTooltip": "已应用 {title} 技能（{mode}）",
   "skillModeManual": "手动",
-  "skillModeAuto": "自动"
+  "skillModeAuto": "自动",
+  "generationInterrupted": "生成已中断",
+  "partialOutputPreserved": "部分回复已保存，恢复联网后可以继续生成。",
+  "continuationBlockedByTools": "此回复使用了工具，无法安全续写。请改为重新生成新分支。",
+  "continueGeneration": "继续生成",
+  "reply": "引用回复",
+  "openReplySource": "打开被引用的消息",
+  "replySourceUnavailable": "原消息不可用",
+  "regenerateWithModel": "使用指定模型重新生成"
 }

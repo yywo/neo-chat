@@ -206,6 +206,7 @@ export function normalizeModelMetadata(
 
 export function normalizeModelMetadataMap(
   value: unknown,
+  options?: { preserveKeys?: boolean },
 ): Record<string, ModelMetadata> {
   if (!value || typeof value !== "object") return {};
 
@@ -215,7 +216,10 @@ export function normalizeModelMetadataMap(
     const metadata = normalizeModelMetadata(item, key);
     if (!metadata) continue;
 
-    result[metadata.id] = metadata;
+    const normalizedKey = trimString(key, MODEL_METADATA_LIMITS.maxIdChars);
+    result[
+      options?.preserveKeys && normalizedKey ? normalizedKey : metadata.id
+    ] = metadata;
     if (Object.keys(result).length >= MODEL_METADATA_LIMITS.maxEntries) break;
   }
 

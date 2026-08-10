@@ -3,7 +3,7 @@ import {
   createMessageOutputBlockBuilder,
   getMessageOutputBlocks,
 } from "../lib/chat/messageOutputBlocks";
-import type { Message } from "../types";
+import type { Message, MessageOutputBlock } from "../types";
 
 describe("message output blocks", () => {
   afterEach(() => {
@@ -248,6 +248,98 @@ describe("message output blocks", () => {
     expect(builder.getBlocks()[0]).toMatchObject({
       type: "reasoning",
       durationMs: 15,
+    });
+  });
+
+  it("upserts one task plan at a fixed position and finalizes reasoning", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const builder = createMessageOutputBlockBuilder({
+      createId: (() => {
+        let index = 0;
+        return () => `block-${++index}`;
+      })(),
+    });
+
+    builder.appendText("Before");
+    builder.appendReasoning("Planning");
+    now.mockReturnValue(2_500);
+    builder.upsertTaskPlan({
+      steps: [{ title: "First draft", status: "in_progress" }],
+      note: "Initial note",
+    });
+    builder.appendText("After");
+    builder.upsertTaskPlan({
+      steps: [
+        { title: "First draft", status: "completed" },
+        { title: "Verify", status: "in_progress" },
+      ],
+    });
+
+    const blocks = builder.getBlocks();
+    expect(blocks.map((block) => block.type)).toEqual([
+      "text",
+      "reasoning",
+      "task_plan",
+      "text",
+    ]);
+    expect(blocks.filter((block) => block.type === "task_plan")).toHaveLength(
+      1,
+    );
+    expect(blocks[1]).toMatchObject({
+      type: "reasoning",
+      startedAt: 1_000,
+      endedAt: 2_500,
+      durationMs: 1_500,
+    });
+    expect(blocks[2]).toEqual({
+      id: "block-3",
+      type: "task_plan",
+      steps: [
+        { title: "First draft", status: "completed" },
+        { title: "Verify", status: "in_progress" },
+      ],
+    });
+  });
+
+  it("deep-clones initial, input, and returned task plan steps", () => {
+    const initialBlocks: MessageOutputBlock[] = [
+      {
+        id: "plan-1",
+        type: "task_plan",
+        steps: [{ title: "Original", status: "pending" }],
+      },
+      {
+        id: "plan-duplicate",
+        type: "task_plan",
+        steps: [{ title: "Duplicate", status: "pending" }],
+      },
+    ];
+    const builder = createMessageOutputBlockBuilder({ initialBlocks });
+
+    if (initialBlocks[0]?.type === "task_plan") {
+      initialBlocks[0].steps[0]!.title = "Mutated initial";
+    }
+    expect(builder.getBlocks()).toHaveLength(1);
+    expect(builder.getBlocks()[0]).toMatchObject({
+      id: "plan-1",
+      steps: [{ title: "Original", status: "pending" }],
+    });
+
+    const update = {
+      steps: [{ title: "Updated", status: "in_progress" as const }],
+    };
+    builder.upsertTaskPlan(update);
+    update.steps[0]!.title = "Mutated input";
+
+    const snapshot = builder.getBlocks();
+    if (snapshot[0]?.type === "task_plan") {
+      snapshot[0].steps[0]!.title = "Mutated snapshot";
+    }
+
+    expect(builder.getBlocks()[0]).toEqual({
+      id: "plan-1",
+      type: "task_plan",
+      steps: [{ title: "Updated", status: "in_progress" }],
     });
   });
 });

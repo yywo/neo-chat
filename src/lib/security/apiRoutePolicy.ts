@@ -85,6 +85,16 @@ const API_ROUTE_POLICIES: readonly ApiRoutePolicy[] = [
     },
   },
   {
+    pattern: /^\/api\/sync(?:\/|$)/,
+    requestProofMethods: ALL_METHODS,
+    rateLimitMethods: MUTATING_METHODS,
+    rateLimit: {
+      routeFamily: "/api/sync",
+      windowMs: 60_000,
+      maxRequests: 180,
+    },
+  },
+  {
     pattern: /^\/api\/voice(?:\/|$)/,
     requestProofMethods: ALL_METHODS,
     rateLimitMethods: MUTATING_METHODS,
@@ -132,6 +142,16 @@ const API_ROUTE_POLICIES: readonly ApiRoutePolicy[] = [
       routeFamily: "/api/plugins/install",
       windowMs: 60_000,
       maxRequests: 20,
+    },
+  },
+  {
+    pattern: /^\/api\/plugins\/mcp-bridge\/discover$/,
+    requestProofMethods: ["POST"],
+    rateLimitMethods: ["POST"],
+    rateLimit: {
+      routeFamily: "/api/plugins/mcp-bridge/discover",
+      windowMs: 60_000,
+      maxRequests: 10,
     },
   },
   {

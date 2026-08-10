@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#09090b" />
+    <title>Neo Chat · Offline</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #f4f4f5;
+        color: #18181b;
+      }
+      main {
+        width: min(28rem, calc(100vw - 2rem));
+        padding: 2rem;
+        border: 1px solid #d4d4d8;
+        border-radius: 1rem;
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.12);
+      }
+      img {
+        width: 3rem;
+        height: 3rem;
+        border-radius: 0.8rem;
+      }
+      h1 {
+        margin: 1rem 0 0.5rem;
+        font-size: 1.25rem;
+      }
+      p {
+        margin: 0;
+        color: #52525b;
+        line-height: 1.6;
+      }
+      button {
+        margin-top: 1.25rem;
+        border: 0;
+        border-radius: 0.55rem;
+        padding: 0.65rem 0.9rem;
+        background: #18181b;
+        color: white;
+        font: inherit;
+        cursor: pointer;
+      }
+      @media (prefers-color-scheme: dark) {
+        body {
+          background: #09090b;
+          color: #fafafa;
+        }
+        main {
+          border-color: #3f3f46;
+          background: rgba(24, 24, 27, 0.94);
+        }
+        p {
+          color: #a1a1aa;
+        }
+        button {
+          background: #fafafa;
+          color: #18181b;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="/logo.png" alt="" />
+      <h1 id="title">Neo Chat is offline</h1>
+      <p id="detail">
+        Reconnect once to finish preparing offline history access.
+      </p>
+      <button id="retry" type="button">Retry</button>
+    </main>
+    <script>
+      const lang = navigator.language.toLowerCase();
+      const copy = lang.startsWith("zh")
+        ? [
+            "Neo Chat 当前离线",
+            "请重新联网一次，以完成离线历史访问的准备。",
+            "重试",
+          ]
+        : lang.startsWith("ja")
+          ? [
+              "Neo Chat はオフラインです",
+              "オフライン履歴の準備を完了するには、一度オンラインに戻ってください。",
+              "再試行",
+            ]
+          : [
+              "Neo Chat is offline",
+              "Reconnect once to finish preparing offline history access.",
+              "Retry",
+            ];
+      document.documentElement.lang = lang.startsWith("zh")
+        ? "zh-CN"
+        : lang.startsWith("ja")
+          ? "ja"
+          : "en";
+      document.getElementById("title").textContent = copy[0];
+      document.getElementById("detail").textContent = copy[1];
+      document.getElementById("retry").textContent = copy[2];
+      document
+        .getElementById("retry")
+        .addEventListener("click", () => location.reload());
+    </script>
+  </body>
+</html>

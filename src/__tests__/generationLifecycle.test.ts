@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createActiveGenerationSyncSnapshot,
+  createInterruptedGenerationUpdate,
   getNextMessageIdAfter,
   getNextGenerationRunId,
   isCurrentGenerationRun,
@@ -83,6 +84,58 @@ describe("generation lifecycle guards", () => {
         activeMessages: [],
       }),
     ).toBeNull();
+  });
+
+  it("closes transient search state before persisting an interrupted generation", () => {
+    const message: Message = {
+      id: "model-1",
+      role: "model",
+      content: "partial",
+      timestamp: 1,
+      isSearching: true,
+      generation: {
+        requestId: "run-1",
+        status: "streaming",
+        ownerDeviceId: "device-1",
+        model: "openai:gpt-4",
+        checkpointAt: 10,
+        attempt: 1,
+      },
+      outputBlocks: [
+        {
+          id: "search-active",
+          type: "search",
+          isSearching: true,
+          sources: [],
+          images: [],
+        },
+        {
+          id: "search-complete",
+          type: "search",
+          isSearching: false,
+          sources: [],
+          images: [],
+        },
+      ],
+    };
+
+    expect(createInterruptedGenerationUpdate(message, 20)).toEqual({
+      isSearching: false,
+      generation: {
+        ...message.generation,
+        status: "interrupted",
+        checkpointAt: 20,
+      },
+      outputBlocks: [
+        {
+          ...message.outputBlocks![0],
+          isSearching: false,
+        },
+        message.outputBlocks![1],
+      ],
+    });
+    expect(message.isSearching).toBe(true);
+    expect(message.outputBlocks?.[0]).toMatchObject({ isSearching: true });
   });
 
   it("finds the next message id after a regeneration target", () => {

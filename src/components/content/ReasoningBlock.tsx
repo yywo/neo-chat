@@ -110,6 +110,7 @@ const ReasoningBlock: React.FC<ReasoningBlockProps> = ({
             <MarkdownRenderer
               content={reasoning}
               className="text-gray-600 dark:text-foreground/85 text-xs! md:text-sm!"
+              isStreaming={isThinking}
             />
           </div>
         </div>

@@ -4,6 +4,36 @@
 
 import { ModelMetadata } from "@/types";
 
+export function getProviderModelMetadataKey(
+  providerId: string,
+  modelName: string,
+): string {
+  return `${providerId}:${modelName}`;
+}
+
+export function resolveProviderModelMetadata({
+  providerId,
+  modelName,
+  modelMetadata,
+  customModelMetadata,
+}: {
+  providerId?: string;
+  modelName: string;
+  modelMetadata: Record<string, ModelMetadata>;
+  customModelMetadata: Record<string, ModelMetadata>;
+}): ModelMetadata | undefined {
+  const qualifiedKey = providerId
+    ? getProviderModelMetadataKey(providerId, modelName)
+    : undefined;
+
+  return (
+    (qualifiedKey ? customModelMetadata[qualifiedKey] : undefined) ||
+    customModelMetadata[modelName] ||
+    (qualifiedKey ? modelMetadata[qualifiedKey] : undefined) ||
+    modelMetadata[modelName]
+  );
+}
+
 /**
  * 解析模型字符串（格式：providerId:modelName）
  */

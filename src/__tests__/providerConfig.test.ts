@@ -103,6 +103,30 @@ describe("provider config normalization", () => {
     expect(migrated.providers?.[0]?.type).toBe("OpenAI");
   });
 
+  it("clears persisted base URLs that cannot be parsed", async () => {
+    const migrated = await migrateCoreSettingsState({
+      providers: [
+        {
+          id: "OLD",
+          type: "OpenAI Compatible",
+          baseUrl: "https://",
+        },
+      ],
+    });
+
+    expect(migrated.providers?.[0]?.baseUrl).toBe("");
+  });
+
+  it("preserves valid self-hosted base URLs", () => {
+    const provider = normalizeModelProvider({
+      id: "LOCAL",
+      type: "OpenAI Compatible",
+      baseUrl: " http://127.0.0.1:11434/v1/ ",
+    });
+
+    expect(provider?.baseUrl).toBe("http://127.0.0.1:11434/v1/");
+  });
+
   it("filters invalid providers and caps provider/model counts", () => {
     const providers = Array.from(
       { length: PROVIDER_CONFIG_LIMITS.maxProviders + 5 },

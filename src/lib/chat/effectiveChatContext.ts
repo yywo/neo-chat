@@ -27,7 +27,12 @@ import {
 } from "../settings/searchRag";
 import { buildDiagramPromptInstruction } from "./diagramPrompt";
 import { buildHtmlVisualPromptInstruction } from "./htmlVisualPrompt";
-import { parseModelString, supportsModality } from "../utils/model";
+import {
+  parseModelString,
+  resolveProviderModelMetadata,
+  supportsModality,
+  supportsToolCalls,
+} from "../utils/model";
 
 export type CapabilityStatusCode =
   | "ok"
@@ -49,6 +54,7 @@ export interface ModelCapabilities {
   attachment: boolean;
   audio: boolean;
   reasoning: boolean;
+  toolCall: boolean;
 }
 
 export interface EffectiveChatContext {
@@ -59,6 +65,7 @@ export interface EffectiveChatContext {
   activePluginIds: string[];
   activeSkillIds: string[];
   modelCapabilities: ModelCapabilities;
+  agentModeEnabled: boolean;
   searchCompatibility: SearchCompatibilityResult;
   capabilityStatuses: CapabilityStatus[];
 }
@@ -191,8 +198,13 @@ function getModelCapabilities({
   ResolveEffectiveChatContextOptions,
   "selectedModel" | "modelMetadata" | "customModelMetadata"
 >): ModelCapabilities {
-  const { modelName } = parseModelString(selectedModel);
-  const meta = customModelMetadata[modelName] || modelMetadata[modelName];
+  const { providerId, modelName } = parseModelString(selectedModel);
+  const meta = resolveProviderModelMetadata({
+    providerId,
+    modelName,
+    modelMetadata,
+    customModelMetadata,
+  });
   const lower = modelName.toLowerCase();
   const reasoningByName =
     lower.includes("thinking") ||
@@ -205,6 +217,7 @@ function getModelCapabilities({
     attachment: meta?.attachment ?? false,
     audio: supportsModality(meta, "audio", "input"),
     reasoning: meta?.reasoning ?? reasoningByName,
+    toolCall: supportsToolCalls(meta),
   };
 }
 
@@ -313,6 +326,8 @@ export function resolveEffectiveChatContext(
     activePluginIds,
     activeSkillIds,
     modelCapabilities,
+    agentModeEnabled:
+      chatConfig.useAgentMode === true && modelCapabilities.toolCall,
     searchCompatibility,
     capabilityStatuses: statuses.length
       ? statuses

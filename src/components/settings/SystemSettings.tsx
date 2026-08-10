@@ -739,6 +739,19 @@ const SystemSettings = () => {
         description={t("systemAutomationDesc")}
       >
         <ToggleRow
+          title={t("autoScroll")}
+          description={t("autoScrollDesc")}
+          ariaLabel={t("autoScrollAria")}
+          name="enableAutoScroll"
+          checked={system.enableAutoScroll === true}
+          onChange={() =>
+            updateSystemSettings({
+              enableAutoScroll: system.enableAutoScroll !== true,
+            })
+          }
+        />
+
+        <ToggleRow
           title={t("destructiveToolConfirmation")}
           description={t("destructiveToolConfirmationDesc")}
           ariaLabel={t("destructiveToolConfirmationAria")}
@@ -803,6 +816,159 @@ const SystemSettings = () => {
             })
           }
         />
+
+        <div className="px-4 py-4 sm:px-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-foreground">
+                {t("autoImageCompression")}
+              </div>
+              <div className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
+                {t("autoImageCompressionDesc")}
+              </div>
+            </div>
+            <SimpleSwitch
+              ariaLabel={t("autoImageCompressionAria")}
+              name="enableAutoImageCompression"
+              checked={system.enableAutoImageCompression}
+              onChange={() =>
+                updateSystemSettings({
+                  enableAutoImageCompression:
+                    !system.enableAutoImageCompression,
+                })
+              }
+            />
+          </div>
+
+          {system.enableAutoImageCompression ? (
+            <div
+              data-testid="image-compression-controls"
+              className="mt-4 grid min-w-0 gap-4 rounded-lg bg-muted/45 p-4 sm:grid-cols-2"
+            >
+              <div className="min-w-0 space-y-2">
+                <div className="flex justify-between gap-3 text-xs text-muted-foreground">
+                  <label
+                    htmlFor="image-compression-max-size"
+                    className="font-medium"
+                  >
+                    {t("imageCompressionMaxSize")}
+                  </label>
+                  <span className="shrink-0 font-mono text-foreground">
+                    {t("imageCompressionSizeValue", {
+                      value: system.imageCompressionMaxSizeMB,
+                    })}
+                  </span>
+                </div>
+                <input
+                  id="image-compression-max-size"
+                  name="imageCompressionMaxSizeMB"
+                  type="range"
+                  min={SYSTEM_SETTINGS_LIMITS.minImageCompressionMaxSizeMB}
+                  max={SYSTEM_SETTINGS_LIMITS.maxImageCompressionMaxSizeMB}
+                  step={SYSTEM_SETTINGS_LIMITS.imageCompressionMaxSizeMBStep}
+                  value={system.imageCompressionMaxSizeMB}
+                  onChange={(event) =>
+                    updateSystemSettings({
+                      imageCompressionMaxSizeMB: parseFloat(event.target.value),
+                    })
+                  }
+                  aria-label={t("imageCompressionMaxSizeAria")}
+                  aria-valuetext={t("imageCompressionSizeValue", {
+                    value: system.imageCompressionMaxSizeMB,
+                  })}
+                  aria-describedby="image-compression-max-size-bounds"
+                  className="h-1.5 w-full min-w-0 cursor-pointer appearance-none rounded-lg bg-input accent-brand"
+                />
+                <div
+                  id="image-compression-max-size-bounds"
+                  className="flex justify-between gap-2 text-[10px] text-muted-foreground"
+                >
+                  <span>
+                    {t("imageCompressionSizeValue", {
+                      value:
+                        SYSTEM_SETTINGS_LIMITS.minImageCompressionMaxSizeMB,
+                    })}
+                  </span>
+                  <span>
+                    {t("imageCompressionSizeValue", {
+                      value:
+                        SYSTEM_SETTINGS_LIMITS.maxImageCompressionMaxSizeMB,
+                    })}
+                  </span>
+                </div>
+              </div>
+
+              <div className="min-w-0 space-y-2">
+                <div className="flex justify-between gap-3 text-xs text-muted-foreground">
+                  <label
+                    htmlFor="image-compression-max-dimension"
+                    className="font-medium"
+                  >
+                    {t("imageCompressionMaxDimension")}
+                  </label>
+                  <span className="shrink-0 font-mono text-foreground">
+                    {t("imageCompressionDimensionValue", {
+                      value: system.imageCompressionMaxWidthOrHeight,
+                    })}
+                  </span>
+                </div>
+                <input
+                  id="image-compression-max-dimension"
+                  name="imageCompressionMaxWidthOrHeight"
+                  type="range"
+                  min={
+                    SYSTEM_SETTINGS_LIMITS.minImageCompressionMaxWidthOrHeight
+                  }
+                  max={
+                    SYSTEM_SETTINGS_LIMITS.maxImageCompressionMaxWidthOrHeight
+                  }
+                  step={
+                    SYSTEM_SETTINGS_LIMITS.imageCompressionMaxWidthOrHeightStep
+                  }
+                  value={system.imageCompressionMaxWidthOrHeight}
+                  onChange={(event) =>
+                    updateSystemSettings({
+                      imageCompressionMaxWidthOrHeight: parseInt(
+                        event.target.value,
+                        10,
+                      ),
+                    })
+                  }
+                  aria-label={t("imageCompressionMaxDimensionAria")}
+                  aria-valuetext={t("imageCompressionDimensionValue", {
+                    value: system.imageCompressionMaxWidthOrHeight,
+                  })}
+                  aria-describedby="image-compression-max-dimension-bounds image-compression-aspect-ratio-note"
+                  className="h-1.5 w-full min-w-0 cursor-pointer appearance-none rounded-lg bg-input accent-brand"
+                />
+                <div
+                  id="image-compression-max-dimension-bounds"
+                  className="flex justify-between gap-2 text-[10px] text-muted-foreground"
+                >
+                  <span>
+                    {t("imageCompressionDimensionValue", {
+                      value:
+                        SYSTEM_SETTINGS_LIMITS.minImageCompressionMaxWidthOrHeight,
+                    })}
+                  </span>
+                  <span>
+                    {t("imageCompressionDimensionValue", {
+                      value:
+                        SYSTEM_SETTINGS_LIMITS.maxImageCompressionMaxWidthOrHeight,
+                    })}
+                  </span>
+                </div>
+              </div>
+
+              <p
+                id="image-compression-aspect-ratio-note"
+                className="text-[11px] leading-relaxed text-muted-foreground sm:col-span-2"
+              >
+                {t("imageCompressionAspectRatioNote")}
+              </p>
+            </div>
+          ) : null}
+        </div>
 
         <div className="px-4 py-4 sm:px-5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">

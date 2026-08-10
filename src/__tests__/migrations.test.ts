@@ -64,6 +64,35 @@ describe("storage migrations", () => {
     ).toBe("error");
   });
 
+  it("preserves images attached to tool results", () => {
+    expect(
+      normalizeToolCall({
+        id: "image",
+        name: "generate_image",
+        args: {},
+        status: "success",
+        result: { imageBase64: "[image omitted]", imageCount: 1 },
+        resultImages: [
+          {
+            id: "image_1",
+            mimeType: "image/png",
+            data: "aW1hZ2U=",
+            fileName: "plugin-image.png",
+          },
+        ],
+      }),
+    ).toMatchObject({
+      resultImages: [
+        {
+          id: "image_1",
+          mimeType: "image/png",
+          data: "aW1hZ2U=",
+          fileName: "plugin-image.png",
+        },
+      ],
+    });
+  });
+
   it("preserves permission metadata and closes interrupted confirmations", () => {
     expect(
       normalizeToolCall({

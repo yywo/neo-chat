@@ -16,6 +16,24 @@ export interface TextSkillActivation {
   exampleQueries: string[];
 }
 
+export type SkillParameterInput = "text" | "textarea" | "select";
+
+export interface SkillParameterOption {
+  value: string;
+  label: string;
+}
+
+export interface SkillParameterDefinition {
+  key: string;
+  label: string;
+  description?: string;
+  input: SkillParameterInput;
+  required?: boolean;
+  defaultValue?: string;
+  options?: SkillParameterOption[];
+  maxLength: number;
+}
+
 export interface SkillCatalogEntry {
   id: string;
   name: string;
@@ -28,6 +46,7 @@ export interface SkillCatalogEntry {
   outputFormat: string;
   risk: TextSkillRisk;
   activation: TextSkillActivation;
+  parameters?: SkillParameterDefinition[];
   file?: string;
   builtIn?: boolean;
   isCustom?: boolean;
@@ -77,6 +96,8 @@ export interface SelectedSkill {
 export interface AppliedSkill {
   skill: TextSkill;
   mode: SkillInvocationMode;
+  parameters?: Record<string, string>;
+  bundleId?: string;
 }
 
 export interface AppliedSkillInvocation {
@@ -85,6 +106,30 @@ export interface AppliedSkillInvocation {
   description?: string;
   category: string;
   mode: SkillInvocationMode;
+  schemaVersion?: 2;
+  definitionHash?: string;
+  order?: number;
+  parameters?: Record<string, string>;
+  bundleId?: string;
+}
+
+export type SkillParameterBinding =
+  { type: "literal"; value: string } | { type: "bundle"; parameterKey: string };
+
+export interface SkillBundleStep {
+  id: string;
+  skillId: string;
+  bindings: Record<string, SkillParameterBinding>;
+}
+
+export interface SkillBundle {
+  id: string;
+  title: string;
+  description: string;
+  parameters: SkillParameterDefinition[];
+  steps: SkillBundleStep[];
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface SkillSelectionResult {

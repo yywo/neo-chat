@@ -6,6 +6,7 @@ import {
   OPENAI_COMPATIBLE_PROVIDER_TYPE,
   normalizeProviderType as normalizeProviderTypeValue,
 } from "./providerTypes";
+import { normalizeProviderBaseUrl } from "../security/urlPolicy";
 
 function trimString(value: unknown, maxChars: number): string {
   return typeof value === "string" ? value.trim().slice(0, maxChars) : "";
@@ -13,6 +14,18 @@ function trimString(value: unknown, maxChars: number): string {
 
 function normalizeProviderType(value: unknown): ProviderType {
   return normalizeProviderTypeValue(value, OPENAI_COMPATIBLE_PROVIDER_TYPE);
+}
+
+function normalizeBaseUrl(value: unknown, type: ProviderType): string {
+  const baseUrl = trimString(value, PROVIDER_CONFIG_LIMITS.maxBaseUrlChars);
+  if (!baseUrl || baseUrl === "default") return baseUrl;
+
+  try {
+    normalizeProviderBaseUrl(baseUrl, type);
+    return baseUrl;
+  } catch {
+    return "";
+  }
 }
 
 export function migrateCoreSettingsState<T extends { providers?: unknown }>(
@@ -69,7 +82,7 @@ export function normalizeModelProvider(
       fallback?.name ||
       "Provider",
     type,
-    baseUrl: trimString(raw.baseUrl, PROVIDER_CONFIG_LIMITS.maxBaseUrlChars),
+    baseUrl: normalizeBaseUrl(raw.baseUrl, type),
     apiKey: trimString(raw.apiKey, PROVIDER_CONFIG_LIMITS.maxApiKeyChars),
     ...(isLocalEncryptedSecretEnvelope(raw.apiKeySecret)
       ? { apiKeySecret: raw.apiKeySecret }

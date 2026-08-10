@@ -542,6 +542,8 @@ export const DiagramBlock = ({
     "idle" | "copied" | "error"
   >("idle");
   const [isFullscreen, setIsFullscreen] = React.useState(false);
+  const [isNearViewport, setIsNearViewport] = React.useState(false);
+  const diagramBodyRef = React.useRef<HTMLDivElement>(null);
   const copyResetTimerRef = React.useRef<TimeoutHandle | null>(null);
   const [lastRenderedDiagram, setLastRenderedDiagram] =
     React.useState<MarkdownDiagramBlock | null>(() =>
@@ -557,6 +559,30 @@ export const DiagramBlock = ({
   React.useEffect(() => {
     return () => clearTimeoutRef(copyResetTimerRef);
   }, []);
+
+  React.useEffect(() => {
+    const element = diagramBodyRef.current;
+    if (!element || isNearViewport) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setIsNearViewport(true);
+      return;
+    }
+
+    const scrollRoot = element.closest<HTMLElement>(
+      "[data-chat-scroll-container]",
+    );
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setIsNearViewport(true);
+          observer.disconnect();
+        }
+      },
+      { root: scrollRoot, rootMargin: "600px 0px" },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [isNearViewport]);
 
   const renderableDiagram = getRenderableDiagram(diagram, lastRenderedDiagram);
 
@@ -746,13 +772,23 @@ export const DiagramBlock = ({
           </div>
           {controls}
         </div>
-        <div className="markdown-diagram-body">
-          <DiagramRenderer
-            diagram={renderableDiagram}
-            theme={theme}
-            enhanced={enhanced}
-            mode="inline"
-          />
+        <div ref={diagramBodyRef} className="markdown-diagram-body">
+          {isNearViewport && !renderableDiagram.incomplete ? (
+            <DiagramRenderer
+              diagram={renderableDiagram}
+              theme={theme}
+              enhanced={enhanced}
+              mode="inline"
+            />
+          ) : (
+            <DiagramStatus
+              label={
+                renderableDiagram.incomplete
+                  ? t("diagramStreaming")
+                  : t("diagramLoading")
+              }
+            />
+          )}
         </div>
       </div>
       {fullscreenView}

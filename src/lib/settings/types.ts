@@ -3,7 +3,11 @@ import type { ChatConfig } from "../chat/types";
 import type { Plugin, PluginConfig } from "../plugin/types";
 import type { ModelMetadata, ModelProvider } from "../providers/types";
 import type { LocalEncryptedSecretEnvelope } from "../security/localSecrets";
-import type { SearchProviderID, SearchServiceConfig } from "../search/types";
+import type {
+  SearchProviderID,
+  SearchServiceConfig,
+  SearchTimeRange,
+} from "../search/types";
 import type { SkillCatalog, SkillDataLocale, TextSkill } from "../skills/types";
 import type { VoiceSettings } from "../voice/types";
 export type {
@@ -55,11 +59,15 @@ export interface DefaultModels {
 export interface SystemSettings {
   systemPrompt: string;
   personality: SystemPersonality;
+  enableAutoScroll: boolean;
   enableAutoTitle: boolean;
   enableRelatedQuestions: boolean;
   enableAutoCompression: boolean;
   compressionThreshold: number;
   historyKeepCount: number;
+  enableAutoImageCompression: boolean;
+  imageCompressionMaxSizeMB: number;
+  imageCompressionMaxWidthOrHeight: number;
   enableCodeCollapse: boolean;
   enableHtmlVisualPrompt: boolean;
   enableDestructiveToolConfirmation: boolean;
@@ -76,6 +84,7 @@ export interface AppSettings {
   search: {
     provider: SearchProviderID;
     resultsLimit: number;
+    timeRange: SearchTimeRange;
     configs: Record<string, SearchServiceConfig>;
   };
   rag: RAGConfig;

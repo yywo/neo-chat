@@ -1,10 +1,16 @@
 "use client";
 import React, { useEffect, useId, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
-import type { ToolCall, ToolConfirmationDecision } from "@/types";
+import type { Attachment, ToolCall, ToolConfirmationDecision } from "@/types";
 import {
+  BookOpen,
   ChevronDown,
+  ImageOff,
   LoaderCircle,
+  ListChecks,
+  Search,
+  Sparkles,
+  SquareCode,
   Wrench,
   CheckCircle2,
   AlertCircle,
@@ -16,6 +22,9 @@ import {
   formatToolDisplayValue,
 } from "@/lib/utils/toolDisplay";
 import { redactSensitiveToolArgs } from "@/lib/plugin/confirmation";
+import { useAttachmentDisplayUrl } from "@/lib/utils/useAttachmentDisplayUrl";
+import { useUIStore } from "@/store/core/uiStore";
+import SafeImage from "../ui/SafeImage";
 
 interface ToolCallBlockProps {
   toolCalls: ToolCall[];
@@ -27,6 +36,64 @@ interface ToolCallBlockProps {
 }
 
 const EMPTY_TOOL_CALLS: ToolCall[] = [];
+
+const BUILTIN_TOOL_PRESENTATIONS = {
+  web_search: { labelKey: "toolWebSearch", icon: Search },
+  search_knowledge: { labelKey: "toolKnowledgeSearch", icon: BookOpen },
+  load_skill: { labelKey: "toolLoadSkill", icon: Sparkles },
+  run_javascript: { labelKey: "toolRunJavaScript", icon: SquareCode },
+  update_task_plan: { labelKey: "toolUpdateTaskPlan", icon: ListChecks },
+} as const;
+
+type BuiltinToolName = keyof typeof BUILTIN_TOOL_PRESENTATIONS;
+
+const getBuiltinToolPresentation = (
+  name: string,
+): (typeof BUILTIN_TOOL_PRESENTATIONS)[BuiltinToolName] | undefined =>
+  BUILTIN_TOOL_PRESENTATIONS[name as BuiltinToolName];
+
+const ToolNameIcon: React.FC<{ name: string }> = ({ name }) => {
+  const Icon = getBuiltinToolPresentation(name)?.icon ?? Wrench;
+  return <Icon size={12} className="text-gray-400" aria-hidden="true" />;
+};
+
+const ToolResultImage: React.FC<{ image: Attachment }> = ({ image }) => {
+  const openImagePreview = useUIStore((state) => state.openImagePreview);
+  const src = useAttachmentDisplayUrl(image);
+
+  return (
+    <button
+      type="button"
+      disabled={!src}
+      onClick={() => {
+        if (!src) return;
+        openImagePreview(
+          [
+            {
+              url: src,
+              alt: image.fileName,
+              description: image.fileName,
+            },
+          ],
+          0,
+        );
+      }}
+      className="block max-w-full overflow-hidden rounded-lg border border-gray-200 bg-white/70 text-left shadow-sm transition-shadow enabled:cursor-pointer enabled:hover:shadow-md disabled:cursor-default dark:border-border dark:bg-background/40"
+      aria-label={image.fileName}
+    >
+      <SafeImage
+        src={src}
+        alt={image.fileName}
+        className="max-h-72 max-w-full object-contain"
+        fallback={
+          <div className="flex h-32 w-56 max-w-full items-center justify-center text-gray-400 dark:text-muted-foreground">
+            <ImageOff size={20} aria-hidden="true" />
+          </div>
+        }
+      />
+    </button>
+  );
+};
 
 const ToolCallBlock: React.FC<ToolCallBlockProps> = ({
   toolCalls,
@@ -40,18 +107,23 @@ const ToolCallBlock: React.FC<ToolCallBlockProps> = ({
 
   const displayToolCalls = useMemo(
     () =>
-      safeToolCalls.map((toolCall) => ({
-        ...toolCall,
-        displayName: formatToolDisplayName(toolCall.name),
-        argsDisplay: formatToolDisplayValue(
-          redactSensitiveToolArgs(toolCall.args),
-        ),
-        resultDisplay:
-          toolCall.result !== undefined
-            ? formatToolDisplayValue(toolCall.result)
-            : null,
-      })),
-    [safeToolCalls],
+      safeToolCalls.map((toolCall) => {
+        const builtinPresentation = getBuiltinToolPresentation(toolCall.name);
+        return {
+          ...toolCall,
+          displayName: builtinPresentation
+            ? t(builtinPresentation.labelKey)
+            : formatToolDisplayName(toolCall.name),
+          argsDisplay: formatToolDisplayValue(
+            redactSensitiveToolArgs(toolCall.args),
+          ),
+          resultDisplay:
+            toolCall.result !== undefined
+              ? formatToolDisplayValue(toolCall.result)
+              : null,
+        };
+      }),
+    [safeToolCalls, t],
   );
 
   const awaitingConfirmation = safeToolCalls.find(
@@ -157,11 +229,7 @@ const ToolCallBlock: React.FC<ToolCallBlockProps> = ({
               <div key={tc.id} className="text-xs">
                 <div className="flex items-center justify-between mb-1.5 font-medium text-gray-700 dark:text-foreground/85">
                   <div className="flex min-w-0 items-center gap-1.5">
-                    <Wrench
-                      size={12}
-                      className="text-gray-400"
-                      aria-hidden="true"
-                    />
+                    <ToolNameIcon name={tc.name} />
                     <span className="truncate">{tc.displayName}</span>
                     {tc.risk ? (
                       <span className="shrink-0 rounded bg-gray-200 px-1.5 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-muted dark:text-muted-foreground">
@@ -303,7 +371,7 @@ const ToolCallBlock: React.FC<ToolCallBlockProps> = ({
                   </pre>
                 </div>
 
-                {tc.result !== undefined && (
+                {(tc.result !== undefined || tc.resultImages?.length) && (
                   <div
                     className={`max-h-72 overflow-auto rounded p-2 font-mono border-l-2 ${tc.isError ? "bg-red-50 dark:bg-red-900/10 border-red-500 text-red-600 dark:text-red-300" : "bg-green-50 dark:bg-green-900/10 border-green-500 text-gray-600 dark:text-foreground/85"}`}
                   >
@@ -311,9 +379,18 @@ const ToolCallBlock: React.FC<ToolCallBlockProps> = ({
                       {t("resultLabel")}
                     </span>
                     {tc.resultDisplay?.truncated ? <TruncatedBadge /> : null}
-                    <pre className="mt-1 whitespace-pre-wrap break-words">
-                      {tc.resultDisplay?.text || ""}
-                    </pre>
+                    {tc.result !== undefined ? (
+                      <pre className="mt-1 whitespace-pre-wrap break-words">
+                        {tc.resultDisplay?.text || ""}
+                      </pre>
+                    ) : null}
+                    {tc.resultImages?.length ? (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {tc.resultImages.map((image) => (
+                          <ToolResultImage key={image.id} image={image} />
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 )}
               </div>

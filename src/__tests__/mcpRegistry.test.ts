@@ -6,7 +6,7 @@ import {
 } from "../lib/mcp/registry";
 
 describe("MCP registry normalization", () => {
-  it("keeps only streamable HTTP remote servers and maps them to plugin cards", () => {
+  it("prefers streamable HTTP when a server also declares legacy SSE", () => {
     const plugins = normalizeMcpRegistryServers({
       servers: [
         {
@@ -54,6 +54,35 @@ describe("MCP registry normalization", () => {
         serverName: "io.github/context7",
         serverVersion: "1.2.3",
         toolNameMap: {},
+      },
+    });
+  });
+
+  it("maps legacy SSE-only remote servers to plugin cards", () => {
+    const plugins = normalizeMcpRegistryServers({
+      servers: [
+        {
+          server: {
+            name: "io.github/legacy-search",
+            version: "1.0.0",
+            description: "Legacy SSE search.",
+            remotes: [
+              {
+                type: "sse",
+                url: "https://mcp.example.com/sse",
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0]).toMatchObject({
+      id: "mcp:io.github/legacy-search:1.0.0",
+      mcp: {
+        transport: "sse",
+        serverUrl: "https://mcp.example.com/sse",
       },
     });
   });

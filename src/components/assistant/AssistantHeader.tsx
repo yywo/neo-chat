@@ -20,6 +20,7 @@ interface AssistantHeaderProps {
   instruction: string;
   onUpdate: (newInstruction: string) => void;
   onDelete?: () => void;
+  disabled?: boolean;
 }
 
 const logAssistantHeaderError = logDevError;
@@ -31,6 +32,7 @@ const AssistantHeader: React.FC<AssistantHeaderProps> = ({
   instruction,
   onUpdate,
   onDelete,
+  disabled = false,
 }) => {
   const t = useTranslations("Assistant");
   const [isEditing, setIsEditing] = useState(false);
@@ -56,6 +58,10 @@ const AssistantHeader: React.FC<AssistantHeaderProps> = ({
   }, [isEditing]);
 
   useEffect(() => {
+    if (disabled) setIsEditing(false);
+  }, [disabled]);
+
+  useEffect(() => {
     isMountedRef.current = true;
 
     return () => {
@@ -79,7 +85,7 @@ const AssistantHeader: React.FC<AssistantHeaderProps> = ({
   };
 
   const handleOptimize = async () => {
-    if (!content.trim() || isOptimizing) return;
+    if (!content.trim() || isOptimizing || disabled) return;
 
     const runId = optimizeRunRef.current + 1;
     optimizeRunRef.current = runId;
@@ -146,7 +152,7 @@ const AssistantHeader: React.FC<AssistantHeaderProps> = ({
               aria-label={t("optimizePrompt")}
               aria-busy={isOptimizing}
               onClick={handleOptimize}
-              disabled={isOptimizing}
+              disabled={isOptimizing || disabled}
               className={`p-1 text-blue-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md transition-colors disabled:opacity-50 ml-1 ${iconButtonFocusClass}`}
             >
               {isOptimizing ? (
@@ -168,6 +174,7 @@ const AssistantHeader: React.FC<AssistantHeaderProps> = ({
               type="button"
               aria-label={t("editInstructions")}
               onClick={() => setIsEditing(true)}
+              disabled={disabled}
               className={`p-1.5 hover:bg-white/50 dark:hover:bg-accent/50 rounded-lg text-gray-500 dark:text-muted-foreground transition-colors ${iconButtonFocusClass}`}
             >
               <PenLine size={14} aria-hidden="true" />
@@ -177,6 +184,7 @@ const AssistantHeader: React.FC<AssistantHeaderProps> = ({
                 type="button"
                 aria-label={t("clearInstructions")}
                 onClick={onDelete}
+                disabled={disabled}
                 className={`p-1.5 hover:bg-red-50 dark:hover:bg-red-900/30 text-gray-400 hover:text-red-500 dark:text-muted-foreground/70 dark:hover:text-red-400 rounded-lg transition-colors ${iconButtonFocusClass}`}
               >
                 <X size={16} aria-hidden="true" />
@@ -197,6 +205,7 @@ const AssistantHeader: React.FC<AssistantHeaderProps> = ({
               type="button"
               aria-label={t("saveInstructions")}
               onClick={handleSave}
+              disabled={disabled}
               className={`p-1 hover:bg-red-50 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg transition-colors ${iconButtonFocusClass}`}
             >
               <Save size={16} aria-hidden="true" />
@@ -242,6 +251,7 @@ const AssistantHeader: React.FC<AssistantHeaderProps> = ({
               autoComplete="off"
               aria-describedby={optimizeError ? optimizeErrorId : undefined}
               aria-busy={isOptimizing}
+              disabled={disabled}
               onChange={(e) => {
                 setContent(e.target.value);
                 e.target.style.height = "auto";

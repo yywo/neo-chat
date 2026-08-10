@@ -5,6 +5,7 @@ import {
   isSessionMessageTree,
   normalizeSessionMessageTree,
 } from "../lib/chat/messageTree";
+import { getMessageOutputBlocks } from "../lib/chat/messageOutputBlocks";
 
 const { appDbMock, deleteFromOPFSMock, storedItems } = vi.hoisted(() => {
   const storedItems = new Map<string, unknown>();
@@ -174,6 +175,57 @@ describe("chat store persistence", () => {
       useChatStore.getState().sessions.map((session) => session.id),
     ).toEqual(["empty", "other"]);
     expect(appDbMock.setItem).not.toHaveBeenCalled();
+  });
+
+  it("resets Agent mode when reusing a legacy empty chat", () => {
+    const existing = {
+      ...makeSession("empty"),
+      title: "New Chat",
+      messageCount: 0,
+    };
+    useChatStore.setState((state) => ({
+      sessions: [existing],
+      chatConfig: {
+        ...state.chatConfig,
+        useAgentMode: true,
+      },
+    }));
+
+    expect(useChatStore.getState().createSession()).toBe("empty");
+    expect(useChatStore.getState().chatConfig.useAgentMode).toBe(false);
+  });
+
+  it("resets Agent mode when creating a chat without session config", () => {
+    useChatStore.setState((state) => ({
+      sessions: [],
+      chatConfig: {
+        ...state.chatConfig,
+        useAgentMode: true,
+      },
+    }));
+
+    const sessionId = useChatStore.getState().createSession();
+
+    expect(useChatStore.getState().currentSessionId).toBe(sessionId);
+    expect(useChatStore.getState().chatConfig.useAgentMode).toBe(false);
+  });
+
+  it("resolves Agent mode only from the selected session", async () => {
+    useChatStore.setState({
+      sessions: [
+        {
+          ...makeSession("agent"),
+          config: { useAgentMode: true },
+        },
+        makeSession("legacy"),
+      ],
+    });
+
+    await useChatStore.getState().selectSession("agent");
+    expect(useChatStore.getState().chatConfig.useAgentMode).toBe(true);
+
+    await useChatStore.getState().selectSession("legacy");
+    expect(useChatStore.getState().chatConfig.useAgentMode).toBe(false);
   });
 
   it("does not reuse titled or non-empty chats when creating a default chat", () => {
@@ -565,6 +617,99 @@ describe("chat store persistence", () => {
     expectStoredActivePath("a", [{ ...message, content: "after" }]);
   });
 
+  it("keeps structured model output in sync when editing message content", async () => {
+    const message: Message = {
+      ...makeModelMessage("m1", "before"),
+      outputBlocks: [
+        {
+          id: "reasoning-1",
+          type: "reasoning",
+          content: "reasoning",
+        },
+        {
+          id: "text-1",
+          type: "text",
+          content: "before",
+        },
+      ],
+    };
+    useChatStore.setState({
+      sessions: [makeSession("a")],
+      currentSessionId: "a",
+      activeMessages: [message],
+      activeMessageTree: normalizeSessionMessageTree([message]),
+    });
+
+    useChatStore.getState().updateMessageContent("a", "m1", "after");
+    await useChatStore.getState().syncActiveSession("a");
+
+    const activeMessage = useChatStore.getState().activeMessages[0]!;
+    expect(activeMessage.content).toBe("after");
+    expect(getMessageOutputBlocks(activeMessage)).toEqual([
+      {
+        id: "reasoning-1",
+        type: "reasoning",
+        content: "reasoning",
+      },
+      {
+        id: "text-1",
+        type: "text",
+        content: "after",
+      },
+    ]);
+    expectStoredActivePath("a", [activeMessage]);
+  });
+
+  it("preserves interleaved output block order when editing model text", async () => {
+    const message: Message = {
+      ...makeModelMessage("m1", "Before After"),
+      outputBlocks: [
+        {
+          id: "text-1",
+          type: "text",
+          content: "Before ",
+        },
+        {
+          id: "image-1",
+          type: "image",
+          image: {
+            id: "generated-1",
+            mimeType: "image/png",
+            data: "image-data",
+            fileName: "generated.png",
+          },
+        },
+        {
+          id: "text-2",
+          type: "text",
+          content: "After",
+        },
+      ],
+    };
+    useChatStore.setState({
+      sessions: [makeSession("a")],
+      currentSessionId: "a",
+      activeMessages: [message],
+      activeMessageTree: normalizeSessionMessageTree([message]),
+    });
+
+    useChatStore.getState().updateMessageContent("a", "m1", "Updated response");
+
+    const activeMessage = useChatStore.getState().activeMessages[0]!;
+    const blocks = getMessageOutputBlocks(activeMessage);
+    expect(blocks.map((block) => [block.id, block.type])).toEqual([
+      ["text-1", "text"],
+      ["image-1", "image"],
+      ["text-2", "text"],
+    ]);
+    expect(
+      blocks
+        .filter((block) => block.type === "text")
+        .map((block) => block.content)
+        .join(""),
+    ).toBe("Updated response");
+  });
+
   it("does not activate a slow duplicate after a newer session selection", async () => {
     const originalMessage = makeMessage("a1", "session a");
     const selectedMessage = makeMessage("b1", "session b");
@@ -598,6 +743,26 @@ describe("chat store persistence", () => {
     expect(state.activeMessages).toEqual([selectedMessage]);
     expect(state.sessions).toHaveLength(3);
     expect(state.sessions[0]?.title).toBe("a (Copy)");
+  });
+
+  it("uses a requested localized duplicate title without changing the source", async () => {
+    const original = { ...makeSession("a"), title: "计划" };
+    useChatStore.setState({
+      sessions: [original],
+      currentSessionId: "a",
+      activeMessages: [makeMessage("a1", "content")],
+      activeMessageTree: normalizeSessionMessageTree([
+        makeMessage("a1", "content"),
+      ]),
+    });
+
+    await useChatStore.getState().duplicateSession("a", "计划（副本）");
+
+    const state = useChatStore.getState();
+    expect(state.sessions[0]?.title).toBe("计划（副本）");
+    expect(state.sessions.find((session) => session.id === "a")?.title).toBe(
+      "计划",
+    );
   });
 
   it("does not duplicate stale data when the source pending write fails", async () => {
@@ -826,7 +991,7 @@ describe("chat store persistence", () => {
     expect(deleteFromOPFSMock).toHaveBeenCalledWith(orphanUrl);
   });
 
-  it("cleans generated image display cache files from deleted output blocks", async () => {
+  it("cleans generated image display cache files from deleted tool results", async () => {
     const cachedImageUrl = "opfs://images/generated/output-cache.png";
     useChatStore.setState({
       sessions: [makeSession("a")],
@@ -837,19 +1002,30 @@ describe("chat store persistence", () => {
           outputBlocks: [
             {
               id: "block_1",
-              type: "image",
-              image: {
-                id: "img_1",
-                mimeType: "image/png",
-                data: "aW1hZ2U=",
-                fileName: "generated.png",
-                displayCache: {
-                  opfsUrl: cachedImageUrl,
-                  sourceKind: "data",
-                  sourceFingerprint: "fingerprint",
-                  createdAt: 1,
+              type: "tool_group",
+              toolCalls: [
+                {
+                  id: "call_1",
+                  name: "generate_image",
+                  args: {},
+                  status: "success",
+                  result: { imageBase64: "[image omitted]", imageCount: 1 },
+                  resultImages: [
+                    {
+                      id: "img_1",
+                      mimeType: "image/png",
+                      data: "aW1hZ2U=",
+                      fileName: "generated.png",
+                      displayCache: {
+                        opfsUrl: cachedImageUrl,
+                        sourceKind: "data",
+                        sourceFingerprint: "fingerprint",
+                        createdAt: 1,
+                      },
+                    },
+                  ],
                 },
-              },
+              ],
             },
           ],
         },
@@ -1011,6 +1187,12 @@ describe("chat store persistence", () => {
     expect(
       useChatStore.getState().sessions.find((session) => session.id === "a"),
     ).toMatchObject({ messageCount: 4 });
+
+    useChatStore.getState().selectMessageVersion("a", "m1", branchId);
+    expect(useChatStore.getState().activeMessages.map((m) => m.id)).toEqual([
+      "u1",
+      branchId,
+    ]);
   });
 
   it("creates an edited user branch with a fresh model placeholder atomically", async () => {

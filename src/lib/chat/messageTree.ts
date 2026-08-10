@@ -6,6 +6,12 @@ export interface MessageBranchInfo {
   count: number;
 }
 
+export interface MessageBranchOption {
+  id: string;
+  message: Message;
+  active: boolean;
+}
+
 export interface NormalizeSessionMessageTreeOptions {
   createId?: () => string;
 }
@@ -346,6 +352,40 @@ export function getMessageBranchInfo(
   };
 }
 
+export function getMessageBranchOptions(
+  tree: SessionMessageTree,
+  messageId: string,
+): MessageBranchOption[] {
+  return getSiblingIds(tree, messageId).flatMap((id) => {
+    const message = tree.nodesById[id]?.message;
+    return message ? [{ id, message, active: id === messageId }] : [];
+  });
+}
+
+export function selectMessageBranch(
+  tree: SessionMessageTree,
+  messageId: string,
+  targetMessageId: string,
+): SessionMessageTree {
+  const nextTree = cloneTree(tree);
+  const node = nextTree.nodesById[messageId];
+  if (!node) return nextTree;
+
+  const siblings = getSiblingIds(nextTree, messageId);
+  if (!siblings.includes(targetMessageId)) return nextTree;
+
+  if (!node.parentMessageId) {
+    nextTree.activeRootMessageId = targetMessageId;
+    return nextTree;
+  }
+
+  const parent = nextTree.nodesById[node.parentMessageId];
+  if (parent) {
+    parent.activeChildMessageId = targetMessageId;
+  }
+  return nextTree;
+}
+
 export function switchMessageBranch(
   tree: SessionMessageTree,
   messageId: string,
@@ -366,17 +406,7 @@ export function switchMessageBranch(
   const targetId = siblings[targetIndex];
   if (!targetId) return nextTree;
 
-  if (!node.parentMessageId) {
-    nextTree.activeRootMessageId = targetId;
-    return nextTree;
-  }
-
-  const parent = nextTree.nodesById[node.parentMessageId];
-  if (parent) {
-    parent.activeChildMessageId = targetId;
-  }
-
-  return nextTree;
+  return selectMessageBranch(nextTree, messageId, targetId);
 }
 
 function collectSubtreeMessages(

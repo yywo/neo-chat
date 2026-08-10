@@ -10,6 +10,8 @@ RUN pnpm install --frozen-lockfile
 
 FROM base AS builder
 WORKDIR /app
+ARG NEXT_DEPLOYMENT_ID
+ENV NEXT_DEPLOYMENT_ID="$NEXT_DEPLOYMENT_ID"
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .

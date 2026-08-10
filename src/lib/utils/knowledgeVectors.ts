@@ -1,4 +1,8 @@
-import { SimpleRecursiveSplitter } from "@/utils/textSplitter";
+import {
+  SimpleRecursiveSplitter,
+  splitMarkdownWithHeadings,
+} from "@/utils/textSplitter";
+import type { KnowledgeChunkingConfig } from "@/types";
 
 export interface KnowledgeVectorItem {
   id: string;
@@ -8,6 +12,9 @@ export interface KnowledgeVectorItem {
     fileName: string;
     collectionId: string;
     chunkIndex: number;
+    headingPath?: string[];
+    chunkingRevision: string;
+    retrieval: "vector" | "keyword" | "both";
   };
 }
 
@@ -16,7 +23,8 @@ interface BuildKnowledgeVectorItemsOptions {
   fileName: string;
   ragFileId: string;
   textContent: string;
-  chunkSize: number;
+  chunking: KnowledgeChunkingConfig;
+  chunkingRevision: string;
 }
 
 export function buildKnowledgeVectorItems({
@@ -24,23 +32,51 @@ export function buildKnowledgeVectorItems({
   fileName,
   ragFileId,
   textContent,
-  chunkSize,
+  chunking,
+  chunkingRevision,
 }: BuildKnowledgeVectorItemsOptions): KnowledgeVectorItem[] {
-  const splitter = new SimpleRecursiveSplitter({
-    chunkSize,
-    chunkOverlap: Math.floor(chunkSize * 0.1),
-  });
+  const chunkOverlap = Math.floor(
+    chunking.chunkSize * (chunking.overlapPercent / 100),
+  );
+  const useMarkdown =
+    chunking.strategy === "markdown" ||
+    (chunking.strategy === "auto" &&
+      (/\.md(?:own)?$/i.test(fileName) || /^#{1,6}\s/m.test(textContent)));
+  const chunks = useMarkdown
+    ? splitMarkdownWithHeadings({
+        text: textContent,
+        chunkSize: chunking.chunkSize,
+        chunkOverlap,
+      })
+    : new SimpleRecursiveSplitter({
+        chunkSize: chunking.chunkSize,
+        chunkOverlap,
+      })
+        .splitText(textContent)
+        .map((text) => ({ text, headingPath: [] as string[] }));
 
-  return splitter.splitText(textContent).map((chunk, index) => ({
+  return chunks.map((chunk, index) => ({
     id: `${ragFileId}_${index}`,
-    data: chunk,
+    data: chunk.text,
     metadata: {
       fileId: ragFileId,
       fileName,
       collectionId,
       chunkIndex: index,
+      ...(chunk.headingPath.length > 0
+        ? { headingPath: chunk.headingPath }
+        : {}),
+      chunkingRevision,
+      retrieval: "vector",
     },
   }));
+}
+
+export function previewKnowledgeChunks(
+  options: BuildKnowledgeVectorItemsOptions,
+  limit = 3,
+): KnowledgeVectorItem[] {
+  return buildKnowledgeVectorItems(options).slice(0, Math.max(0, limit));
 }
 
 export function buildKnowledgeVectorIds(

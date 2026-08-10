@@ -27,6 +27,7 @@ import Config from "./ja/Config.json";
 import Skill from "./ja/Skill.json";
 import About from "./ja/About.json";
 import GlobalSearch from "./ja/GlobalSearch.json";
+import Sync from "./ja/Sync.json";
 
 const messages = {
   Common,
@@ -58,6 +59,7 @@ const messages = {
   Skill,
   About,
   GlobalSearch,
+  Sync,
 };
 
 export default messages;

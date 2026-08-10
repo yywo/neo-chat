@@ -227,10 +227,16 @@ export async function buildProviderRuntimeConfig(
   signal?: AbortSignal,
 ) {
   if (provider.isServerDefault || provider.id === SERVER_DEFAULT_PROVIDER_ID) {
+    const apiKey = await resolveProviderApiKey(provider);
     return {
       type: provider.type,
       name: provider.name,
       source: "server-default" as const,
+      apiKeySecret: await encryptSecret(
+        apiKey,
+        BYOK_CONTEXTS.provider(provider.type),
+        signal,
+      ),
     };
   }
 

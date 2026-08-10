@@ -290,6 +290,7 @@ export function normalizeSessionConfig(
     activeSkills: rawActiveSkills,
     reasoningMode: rawReasoningMode,
     useReasoning: rawUseReasoning,
+    useAgentMode: rawUseAgentMode,
     toolApprovals: rawToolApprovals,
     ...rest
   } = config;
@@ -304,6 +305,9 @@ export function normalizeSessionConfig(
 
   return {
     ...rest,
+    ...(typeof rawUseAgentMode === "boolean"
+      ? { useAgentMode: rawUseAgentMode }
+      : {}),
     ...(reasoningMode
       ? {
           useReasoning: isReasoningEnabled(reasoningMode),

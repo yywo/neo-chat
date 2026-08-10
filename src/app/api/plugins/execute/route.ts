@@ -144,6 +144,7 @@ export async function POST(request: NextRequest) {
 
         const result = await executeMcpToolRequest({
           serverUrl: plugin.mcp.serverUrl,
+          transport: plugin.mcp.transport,
           toolName: mcpToolName,
           args,
           staticHeaders: plugin.mcp.headers,

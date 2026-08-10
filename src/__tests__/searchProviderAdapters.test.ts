@@ -196,6 +196,7 @@ describe("search provider adapters", () => {
       limit: 4,
       sources: ["web", "images"],
     });
+    expect(JSON.parse(init.body as string)).not.toHaveProperty("tbs");
     expect(result).toEqual({
       sources: [
         {
@@ -211,6 +212,24 @@ describe("search provider adapters", () => {
         },
       ],
     });
+  });
+
+  it("sends an explicit Firecrawl time filter when configured", async () => {
+    const fetchJson = vi.fn().mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      data: { data: { web: [], images: [] } },
+    });
+
+    await runSearchProvider({
+      provider: "firecrawl",
+      query: "recent docs",
+      timeRange: "month",
+      maxResultNumber: 4,
+      fetchJson,
+    });
+
+    const [, init] = fetchJson.mock.calls[0]!;
+    expect(JSON.parse(init.body as string)).toMatchObject({ tbs: "qdr:m" });
   });
 
   it("adds Firecrawl authentication only when an optional key is configured", async () => {

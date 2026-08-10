@@ -1,8 +1,10 @@
 "use client";
-import React, { useId, useState } from "react";
+
+import React, { useId, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Source } from "@/types";
+import type { Source } from "@/types";
 import { Library, ChevronDown, BookText } from "lucide-react";
+import { requestKnowledgeSourceNavigation } from "@/lib/knowledge/navigation";
 
 interface RAGBlockProps {
   sources: Source[];
@@ -15,6 +17,16 @@ const RAGBlock: React.FC<RAGBlockProps> = ({ sources, error }) => {
   const contentId = useId();
   const buttonId = useId();
   const hasSources = sources.length > 0;
+  const groupedSources = useMemo(() => {
+    const groups = new Map<string, Source[]>();
+    for (const source of sources) {
+      const key = String(
+        source.metadata?.fileId || source.metadata?.localFileId || source.title,
+      );
+      groups.set(key, [...(groups.get(key) || []), source]);
+    }
+    return [...groups.values()];
+  }, [sources]);
 
   if (!hasSources && !error) return null;
 
@@ -30,21 +42,21 @@ const RAGBlock: React.FC<RAGBlockProps> = ({ sources, error }) => {
   }
 
   return (
-    <div className="mb-3 rounded-lg border border-purple-200 dark:border-purple-800/60 overflow-hidden bg-purple-50/50 dark:bg-purple-900/10 transition-colors duration-300">
+    <div className="mb-3 overflow-hidden rounded-lg border border-purple-200 bg-purple-50/50 transition-colors duration-300 dark:border-purple-800/60 dark:bg-purple-900/10">
       <button
         id={buttonId}
         type="button"
         aria-expanded={isExpanded}
         aria-controls={contentId}
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-purple-700 dark:text-purple-300 hover:bg-purple-100/50 dark:hover:bg-purple-900/20 transition-colors select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/60"
+        className="flex w-full select-none items-center gap-2 px-3 py-2 text-xs font-medium text-purple-700 transition-colors hover:bg-purple-100/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/60 dark:text-purple-300 dark:hover:bg-purple-900/20"
       >
         <Library
           size={14}
           className="text-purple-600 dark:text-purple-400"
           aria-hidden="true"
         />
-        <span className="flex-1 text-left truncate">
+        <span className="flex-1 truncate text-left">
           {t("sourcesHeading", { count: sources.length })}
         </span>
         <ChevronDown
@@ -54,7 +66,6 @@ const RAGBlock: React.FC<RAGBlockProps> = ({ sources, error }) => {
         />
       </button>
 
-      {/* Animated Expansion Container */}
       <div
         id={contentId}
         role="region"
@@ -62,38 +73,95 @@ const RAGBlock: React.FC<RAGBlockProps> = ({ sources, error }) => {
         className={`grid transition-[grid-template-rows,opacity] duration-300 ease-in-out ${isExpanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}
       >
         <div className="overflow-hidden">
-          {isExpanded && (
-            <div className="px-3 py-3 border-t border-purple-200/50 dark:border-purple-800/50 bg-white/40 dark:bg-card/40">
-              {/* Source List */}
-              <div className="space-y-2">
-                {sources.map((source, idx) => {
-                  return (
-                    <div
-                      key={idx}
-                      className="block p-3 rounded-lg bg-white/60 dark:bg-muted/60 border border-purple-100 dark:border-purple-900/30"
-                    >
-                      {/* Line 1: Icon + Title */}
-                      <div className="flex items-center gap-2 mb-1.5">
-                        <div className="shrink-0 w-4 h-4 rounded-sm overflow-hidden bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center text-purple-600 dark:text-purple-400">
-                          <BookText size={10} aria-hidden="true" />
-                        </div>
-                        <div className="text-xs font-bold text-gray-800 dark:text-foreground line-clamp-1">
-                          {source.title}
-                        </div>
+          {isExpanded ? (
+            <div className="border-t border-purple-200/50 bg-white/40 px-3 py-3 dark:border-purple-800/50 dark:bg-card/40">
+              {error ? (
+                <div
+                  role="status"
+                  className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100"
+                >
+                  {error}
+                </div>
+              ) : null}
+              <div className="space-y-3">
+                {groupedSources.map((group, groupIndex) => (
+                  <div
+                    key={`${group[0]?.title}-${groupIndex}`}
+                    className="space-y-2"
+                  >
+                    {group.length > 1 ? (
+                      <div className="px-1 text-[10px] font-semibold uppercase tracking-wider text-purple-700/70 dark:text-purple-300/70">
+                        {String(
+                          group[0]?.metadata?.fileName || group[0]?.title,
+                        )}
                       </div>
-
-                      {/* Line 2: Snippet */}
-                      {source.content && (
-                        <div className="text-[11px] text-gray-600 dark:text-foreground/85 line-clamp-3 leading-relaxed opacity-90 font-mono">
-                          {source.content}
+                    ) : null}
+                    {group.map((source, index) => {
+                      const collectionId =
+                        typeof source.metadata?.collectionId === "string"
+                          ? source.metadata.collectionId
+                          : "";
+                      const fileId =
+                        typeof source.metadata?.localFileId === "string"
+                          ? source.metadata.localFileId
+                          : typeof source.metadata?.fileId === "string"
+                            ? source.metadata.fileId
+                            : undefined;
+                      const retrieval = source.metadata?.retrieval;
+                      const chunkIndex =
+                        typeof source.metadata?.chunkIndex === "number"
+                          ? source.metadata.chunkIndex
+                          : undefined;
+                      const card = (
+                        <div className="block rounded-lg border border-purple-100 bg-white/60 p-3 dark:border-purple-900/30 dark:bg-muted/60">
+                          <div className="mb-1.5 flex items-center gap-2">
+                            <div className="flex h-4 w-4 shrink-0 items-center justify-center overflow-hidden rounded-sm bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400">
+                              <BookText size={10} aria-hidden="true" />
+                            </div>
+                            <div className="line-clamp-1 text-xs font-bold text-gray-800 dark:text-foreground">
+                              {source.title}
+                            </div>
+                            {typeof retrieval === "string" ? (
+                              <span className="ml-auto shrink-0 rounded-full bg-purple-100 px-1.5 py-0.5 text-[9px] font-medium text-purple-700 dark:bg-purple-900/40 dark:text-purple-200">
+                                {t(`retrieval.${retrieval}`)}
+                              </span>
+                            ) : null}
+                          </div>
+                          {source.content ? (
+                            <div className="line-clamp-3 font-mono text-[11px] leading-relaxed text-gray-600 opacity-90 dark:text-foreground/85">
+                              {source.content}
+                            </div>
+                          ) : null}
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
+                      );
+
+                      return collectionId ? (
+                        <button
+                          key={`${source.title}-${index}`}
+                          type="button"
+                          className="block w-full rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/60"
+                          onClick={() =>
+                            requestKnowledgeSourceNavigation({
+                              collectionId,
+                              fileId,
+                              chunkIndex,
+                              excerpt: source.content,
+                            })
+                          }
+                        >
+                          {card}
+                        </button>
+                      ) : (
+                        <React.Fragment key={`${source.title}-${index}`}>
+                          {card}
+                        </React.Fragment>
+                      );
+                    })}
+                  </div>
+                ))}
               </div>
             </div>
-          )}
+          ) : null}
         </div>
       </div>
     </div>

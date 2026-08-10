@@ -38,6 +38,7 @@ process.stdout.write(process.env.WRANGLER_TEST_OUTPUT || "");
         env: {
           ...process.env,
           PATH: `${directory}:${process.env.PATH || ""}`,
+          WRANGLER_SCRIPT: wranglerPath,
           WRANGLER_ARGS_FILE: argsPath,
           WRANGLER_TEST_OUTPUT: output,
           ...(budgetBytes === undefined

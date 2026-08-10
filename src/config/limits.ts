@@ -195,6 +195,14 @@ export const SYSTEM_SETTINGS_LIMITS = {
   minHistoryKeepCount: 1,
   maxHistoryKeepCount: 10,
   defaultHistoryKeepCount: 4,
+  minImageCompressionMaxSizeMB: 0.5,
+  maxImageCompressionMaxSizeMB: 5,
+  defaultImageCompressionMaxSizeMB: 1,
+  imageCompressionMaxSizeMBStep: 0.5,
+  minImageCompressionMaxWidthOrHeight: 512,
+  maxImageCompressionMaxWidthOrHeight: 4_096,
+  defaultImageCompressionMaxWidthOrHeight: 1_024,
+  imageCompressionMaxWidthOrHeightStep: 256,
 } as const;
 
 export const CHAT_ENTITY_LIMITS = {
@@ -237,6 +245,12 @@ export const BROWSER_SANDBOX_LIMITS = {
   maxCodeChars: 100_000,
   maxOutputChars: 20_000,
   executionTimeoutMs: 3_000,
+} as const;
+
+export const TASK_PLAN_LIMITS = {
+  maxSteps: 20,
+  maxTitleChars: 200,
+  maxNoteChars: 500,
 } as const;
 
 export const TOOL_DISPLAY_LIMITS = {

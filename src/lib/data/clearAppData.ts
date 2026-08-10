@@ -8,6 +8,7 @@ import { encryptSecret, fetchWithByokRetry } from "../byok/client";
 import { signedApiFetch } from "../api/client";
 import { BYOK_CONTEXTS } from "../byok/shared";
 import { logDevWarn } from "../utils/devLogger";
+import { clearLocalSyncState } from "../sync/storage";
 import {
   hasRagVectorStore,
   resolveRagToken,
@@ -297,5 +298,6 @@ export async function clearBrowserAppData(rag: RAGConfig): Promise<void> {
     await clearLocalStorageKeys();
     await localforage.clear();
     await appDb.clear();
+    await clearLocalSyncState();
   });
 }

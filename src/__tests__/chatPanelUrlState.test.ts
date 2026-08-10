@@ -39,6 +39,17 @@ describe("chat panel URL state", () => {
     expect(params.get("settingsTab")).toBe("rag");
   });
 
+  it("round-trips the encrypted sync settings tab", () => {
+    const params = setChatPanelUrlState(new URLSearchParams("keep=1"), {
+      panel: "settings",
+      settingsTab: "sync",
+    });
+    const state = parseChatPanelUrlState(params);
+
+    expect(state.settingsTab).toBe("sync");
+    expect(state.needsReplace).toBe(false);
+  });
+
   it("round-trips the skills panel without settings params", () => {
     const params = setChatPanelUrlState(new URLSearchParams("keep=1"), {
       panel: "skills",

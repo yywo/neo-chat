@@ -320,6 +320,95 @@ describe("message preprocessing", () => {
     expect(result.ragSources).toEqual([]);
   });
 
+  it("defers selected knowledge while preserving ordinary attachment processing", async () => {
+    const fileAttachment = createKnowledgeFileAttachment({
+      collectionId: "collection_1",
+      fileId: "file_1",
+      fileName: "notes.md",
+    });
+
+    const result = await processMessageForSending({
+      text: "Compare these notes",
+      attachments: [
+        fileAttachment,
+        {
+          id: "brief",
+          mimeType: "text/plain",
+          fileName: "brief.txt",
+          data: encodeText("ordinary attachment content"),
+        },
+      ],
+      selectedModel: "provider:model",
+      modelMetadata: {
+        model: { attachment: false },
+      },
+      customModelMetadata: {},
+      ragConfig: {
+        enabled: true,
+        useDefaultVectorStore: true,
+        serverVectorStoreAvailable: true,
+      },
+      deferKnowledgeRetrieval: true,
+      knowledgeCollections: [
+        {
+          id: "collection_1",
+          name: "Manual KB",
+          files: [
+            {
+              id: "file_1",
+              name: "notes.md",
+              type: "text/plain",
+              status: "indexed",
+              ragId: "file_1",
+              uploadedAt: 1,
+              path: "opfs://kb/notes",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(mocks.generateRAGSearchQueries).not.toHaveBeenCalled();
+    expect(mocks.queryRAG).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(result.finalText).toContain("ordinary attachment content");
+    expect(result.finalText).not.toContain("knowledge file text");
+    expect(result.knowledgeScope).toEqual([fileAttachment]);
+    expect(result.ragSources).toEqual([]);
+  });
+
+  it("returns a deduplicated workspace knowledge scope when retrieval is deferred", async () => {
+    const manual = createKnowledgeCollectionAttachment({
+      collectionId: "collection_1",
+      collectionName: "Manual KB",
+    });
+
+    const result = await processMessageForSending({
+      text: "Use the docs",
+      attachments: [manual],
+      selectedModel: "provider:model",
+      modelMetadata: { model: { attachment: false } },
+      customModelMetadata: {},
+      ragConfig: { enabled: false },
+      deferKnowledgeRetrieval: true,
+      knowledgeCollections: [
+        {
+          id: "collection_1",
+          name: "Manual KB",
+          files: [],
+        },
+      ],
+      workspaceKnowledgeCollectionIds: ["collection_1"],
+    });
+
+    expect(result.knowledgeScope).toHaveLength(1);
+    expect(result.knowledgeScope[0]).toMatchObject({
+      mimeType: "application/vnd.neo-chat.collection",
+      data: "collection_1",
+    });
+    expect(result.finalText).toBe("Use the docs");
+  });
+
   it("returns a structured RAG error when knowledge lookup fails", async () => {
     mocks.queryRAG.mockRejectedValue(new Error("vector store unavailable"));
 
@@ -378,7 +467,10 @@ describe("message preprocessing", () => {
             title: collectionId,
             url: "#",
             content: `Result from ${collectionId}`,
-            metadata: { collectionId },
+            metadata: {
+              collectionId,
+              fileId: `rag_${collectionId}`,
+            },
           },
         ];
       },
@@ -400,7 +492,19 @@ describe("message preprocessing", () => {
         useDefaultVectorStore: true,
         serverVectorStoreAvailable: true,
       },
-      knowledgeCollections: collectionIds.map((id) => ({ id, files: [] })),
+      knowledgeCollections: collectionIds.map((id) => ({
+        id,
+        files: [
+          {
+            id: `file_${id}`,
+            ragId: `rag_${id}`,
+            name: `${id}.md`,
+            type: "text/markdown",
+            status: "indexed",
+            uploadedAt: 1,
+          },
+        ],
+      })),
     });
 
     expect(maxActiveQueries).toBeLessThanOrEqual(4);

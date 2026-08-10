@@ -115,7 +115,7 @@ export function normalizeImageSource(value: unknown): ImageSource | null {
 
 export function normalizeImageSources(
   value: unknown,
-  maxImages = SEARCH_RESULT_LIMITS.maxImages,
+  maxImages: number = SEARCH_RESULT_LIMITS.maxImages,
 ): ImageSource[] {
   if (!Array.isArray(value)) return [];
 

@@ -12,11 +12,7 @@ import {
   type AppRestoreDb,
   type AppRestoreSnapshot,
 } from "@/lib/data/appRestoreJournal";
-import {
-  isSessionMessageTree,
-  normalizeSessionMessageTree,
-} from "@/lib/chat/messageTree";
-import { normalizeMessages } from "./migrations";
+import { isSessionMessageTree } from "@/lib/chat/messageTree";
 
 /**
  * Storage Configuration
@@ -30,7 +26,7 @@ export const appDb = localforage.createInstance({
   description: "Unified application storage",
 });
 
-export const STORAGE_VERSION = 5;
+export const STORAGE_VERSION = 6;
 export type StorageVersion = typeof STORAGE_VERSION;
 
 export const noopStorage: StateStorage = {
@@ -54,8 +50,9 @@ function parseStoredValue(value: unknown, label: string): unknown {
   }
 }
 
-function validatePersistedChatState(value: unknown): void {
-  if (value === null || value === undefined) return;
+function validatePersistedChatState(value: unknown): Map<string, number> {
+  const sessionMessageCounts = new Map<string, number>();
+  if (value === null || value === undefined) return sessionMessageCounts;
   const persisted = parseStoredValue(value, "chat");
   if (!isRecord(persisted) || !isRecord(persisted.state)) {
     throw new Error("Restored chat data has an invalid persisted state.");
@@ -76,7 +73,17 @@ function validatePersistedChatState(value: unknown): void {
         "Restored chat data contains an invalid or duplicate session identifier.",
       );
     }
+    if (
+      typeof session.messageCount !== "number" ||
+      !Number.isInteger(session.messageCount) ||
+      session.messageCount < 0
+    ) {
+      throw new Error(
+        "Restored chat data contains an invalid session message count.",
+      );
+    }
     sessionIds.add(id);
+    sessionMessageCounts.set(id, session.messageCount);
   }
 
   const currentSessionId = persisted.state.currentSessionId;
@@ -89,55 +96,115 @@ function validatePersistedChatState(value: unknown): void {
       "Restored chat data points to a session that does not exist.",
     );
   }
+
+  return sessionMessageCounts;
 }
 
-function validateStoredMessageTree(value: unknown, key: string): void {
+function validateStoredMessageTree(value: unknown, key: string): number {
   const parsed = parseStoredValue(value, key);
   if (!Array.isArray(parsed) && !isSessionMessageTree(parsed)) {
     throw new Error(`Restored message data in ${key} has an invalid shape.`);
   }
-  const isValidMessage = (message: unknown) =>
+  const isValidMessage = (
+    message: unknown,
+  ): message is Record<string, unknown> & {
+    id: string;
+    role: "user" | "model";
+    content: string;
+  } =>
     isRecord(message) &&
     typeof message.id === "string" &&
     (message.role === "user" || message.role === "model") &&
     typeof message.content === "string";
 
   if (Array.isArray(parsed)) {
-    if (!parsed.every(isValidMessage)) {
-      throw new Error(`Restored message data in ${key} is inconsistent.`);
+    const messageIds = new Set<string>();
+    for (const message of parsed) {
+      if (!isValidMessage(message) || messageIds.has(message.id)) {
+        throw new Error(`Restored message data in ${key} is inconsistent.`);
+      }
+      messageIds.add(message.id);
     }
-  } else {
-    if (
-      !parsed.rootMessageIds.every((id) => typeof id === "string") ||
-      Object.entries(parsed.nodesById).some(
-        ([nodeId, node]) =>
-          !isRecord(node) ||
-          node.id !== nodeId ||
-          !isValidMessage(node.message) ||
-          !Array.isArray(node.childMessageIds) ||
-          !node.childMessageIds.every((id) => typeof id === "string"),
-      )
-    ) {
-      throw new Error(`Restored message data in ${key} is inconsistent.`);
-    }
+    return parsed.length;
   }
-  const normalized = Array.isArray(parsed)
-    ? normalizeSessionMessageTree(normalizeMessages(parsed))
-    : normalizeSessionMessageTree(parsed);
 
-  for (const [nodeId, node] of Object.entries(normalized.nodesById)) {
+  const rootIds = new Set(parsed.rootMessageIds);
+  if (
+    rootIds.size !== parsed.rootMessageIds.length ||
+    !parsed.rootMessageIds.every(
+      (id) => typeof id === "string" && isRecord(parsed.nodesById[id]),
+    ) ||
+    (parsed.activeRootMessageId !== undefined &&
+      (typeof parsed.activeRootMessageId !== "string" ||
+        !rootIds.has(parsed.activeRootMessageId)))
+  ) {
+    throw new Error(`Restored message data in ${key} is inconsistent.`);
+  }
+
+  for (const [nodeId, node] of Object.entries(parsed.nodesById)) {
     if (
+      !isRecord(node) ||
       node.id !== nodeId ||
-      !node.message ||
-      typeof node.message.id !== "string" ||
+      !isValidMessage(node.message) ||
       node.message.id !== nodeId ||
-      (node.message.role !== "user" && node.message.role !== "model") ||
-      typeof node.message.content !== "string" ||
-      !Array.isArray(node.childMessageIds)
+      (node.parentMessageId !== undefined &&
+        typeof node.parentMessageId !== "string") ||
+      !Array.isArray(node.childMessageIds) ||
+      !node.childMessageIds.every((id) => typeof id === "string") ||
+      new Set(node.childMessageIds).size !== node.childMessageIds.length ||
+      (node.activeChildMessageId !== undefined &&
+        (typeof node.activeChildMessageId !== "string" ||
+          !node.childMessageIds.includes(node.activeChildMessageId)))
     ) {
       throw new Error(`Restored message data in ${key} is inconsistent.`);
     }
+
+    if (node.parentMessageId === undefined) {
+      if (!rootIds.has(nodeId)) {
+        throw new Error(`Restored message data in ${key} is inconsistent.`);
+      }
+    } else {
+      const parent = parsed.nodesById[node.parentMessageId];
+      if (
+        !isRecord(parent) ||
+        !Array.isArray(parent.childMessageIds) ||
+        !parent.childMessageIds.includes(nodeId) ||
+        rootIds.has(nodeId)
+      ) {
+        throw new Error(`Restored message data in ${key} is inconsistent.`);
+      }
+    }
+
+    for (const childId of node.childMessageIds) {
+      const child = parsed.nodesById[childId];
+      if (!isRecord(child) || child.parentMessageId !== nodeId) {
+        throw new Error(`Restored message data in ${key} is inconsistent.`);
+      }
+    }
   }
+
+  const visited = new Set<string>();
+  const pending = [...parsed.rootMessageIds];
+  while (pending.length > 0) {
+    const nodeId = pending.pop()!;
+    if (visited.has(nodeId)) {
+      throw new Error(`Restored message data in ${key} is inconsistent.`);
+    }
+    visited.add(nodeId);
+    pending.push(...parsed.nodesById[nodeId].childMessageIds);
+  }
+  if (visited.size !== Object.keys(parsed.nodesById).length) {
+    throw new Error(`Restored message data in ${key} is inconsistent.`);
+  }
+
+  let activeMessageCount = 0;
+  let activeMessageId: string | undefined =
+    parsed.activeRootMessageId || parsed.rootMessageIds[0];
+  while (activeMessageId) {
+    activeMessageCount += 1;
+    activeMessageId = parsed.nodesById[activeMessageId].activeChildMessageId;
+  }
+  return activeMessageCount;
 }
 
 type AppRestoreValidationDb = AppRestoreDb & {
@@ -148,13 +215,39 @@ export async function validateRestoredAppData(
   snapshot: AppRestoreSnapshot,
   db: AppRestoreValidationDb = appDb,
 ): Promise<void> {
-  validatePersistedChatState(await db.getItem(STORAGE_KEYS.CHAT));
+  const sessionMessageCounts = validatePersistedChatState(
+    await db.getItem(STORAGE_KEYS.CHAT),
+  );
   const keys = await db.keys();
   const restoredMessageKeys = keys.filter((key) =>
     key.startsWith(SESSION_MESSAGES_PREFIX),
   );
+  const restoredSessionIds = new Set<string>();
   for (const key of restoredMessageKeys) {
-    validateStoredMessageTree(await db.getItem(key), key);
+    const sessionId = key.slice(SESSION_MESSAGES_PREFIX.length);
+    const actualMessageCount = validateStoredMessageTree(
+      await db.getItem(key),
+      key,
+    );
+    const expectedMessageCount = sessionMessageCounts.get(sessionId);
+    if (expectedMessageCount === undefined) {
+      throw new Error(
+        `Restored message data in ${key} has no matching chat session.`,
+      );
+    }
+    if (actualMessageCount !== expectedMessageCount) {
+      throw new Error(
+        `Restored message data in ${key} does not match the session message count.`,
+      );
+    }
+    restoredSessionIds.add(sessionId);
+  }
+  for (const [sessionId, messageCount] of sessionMessageCounts) {
+    if (messageCount > 0 && !restoredSessionIds.has(sessionId)) {
+      throw new Error(
+        `Restored chat session ${sessionId} has no matching message data.`,
+      );
+    }
   }
 
   const unexpectedManagedKey = snapshot.managedDbKeys.find(
@@ -182,11 +275,33 @@ function prepareBrowserAppRestoreHydration(): Promise<void> | undefined {
   });
 }
 
+let browserSyncRecoveryImport: Promise<void> | undefined;
+
+/**
+ * A sync materialization may have been interrupted after only some persisted
+ * stores were replaced. Every application store waits on this shared recovery
+ * barrier before its first hydration read or write, so a reloaded page cannot
+ * observe or persist the mixed state.
+ */
+function prepareBrowserSyncApplyRecovery(): Promise<void> | undefined {
+  if (typeof window === "undefined") return undefined;
+  browserSyncRecoveryImport ||= import("@/lib/sync/applyJournal").then(
+    ({ prepareBrowserSyncApplyRecovery: prepare }) => prepare(),
+  );
+  return browserSyncRecoveryImport;
+}
+
+function prepareBrowserAppDataHydration(): Promise<void> | undefined {
+  const syncRecovery = prepareBrowserSyncApplyRecovery();
+  if (!syncRecovery) return prepareBrowserAppRestoreHydration();
+  return syncRecovery.then(() => prepareBrowserAppRestoreHydration());
+}
+
 export const getAppDbStorage = (): StateStorage => {
   if (typeof window === "undefined") return noopStorage;
   return {
     getItem: async (name) => {
-      await prepareBrowserAppRestoreHydration();
+      await prepareBrowserAppDataHydration();
       if (!isAppRestoreHydrationInProgress()) {
         try {
           await ensureLegacyGeminiNextChatMigration({
@@ -200,10 +315,16 @@ export const getAppDbStorage = (): StateStorage => {
       }
       return appDb.getItem<string>(name);
     },
-    setItem: (name, value) =>
-      runWithAppRestoreHydrationWriteLock(() => appDb.setItem(name, value)),
-    removeItem: (name) =>
-      runWithAppRestoreHydrationWriteLock(() => appDb.removeItem(name)),
+    setItem: async (name, value) => {
+      await prepareBrowserAppDataHydration();
+      return runWithAppRestoreHydrationWriteLock(() =>
+        appDb.setItem(name, value),
+      );
+    },
+    removeItem: async (name) => {
+      await prepareBrowserAppDataHydration();
+      return runWithAppRestoreHydrationWriteLock(() => appDb.removeItem(name));
+    },
   };
 };
 
@@ -225,19 +346,23 @@ export const getBrowserLocalStorage = (): StateStorage => {
 
   return {
     getItem: (name) => {
-      const preparation = prepareBrowserAppRestoreHydration();
+      const preparation = prepareBrowserAppDataHydration();
       return preparation
         ? preparation.then(() => readItem(name))
         : readItem(name);
     },
-    setItem: (name, value) =>
-      runWithAppRestoreHydrationWriteLock(async () => {
+    setItem: async (name, value) => {
+      await prepareBrowserAppDataHydration();
+      return runWithAppRestoreHydrationWriteLock(async () => {
         window.localStorage.setItem(name, value);
-      }),
-    removeItem: (name) =>
-      runWithAppRestoreHydrationWriteLock(async () => {
+      });
+    },
+    removeItem: async (name) => {
+      await prepareBrowserAppDataHydration();
+      return runWithAppRestoreHydrationWriteLock(async () => {
         window.localStorage.removeItem(name);
-      }),
+      });
+    },
   };
 };
 

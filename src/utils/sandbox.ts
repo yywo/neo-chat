@@ -21,6 +21,15 @@ function getParentMessageOrigin(): string {
   return origin && origin !== "null" ? origin : "*";
 }
 
+function createSandboxAbortError(): Error {
+  if (typeof DOMException !== "undefined") {
+    return new DOMException("JavaScript execution was aborted.", "AbortError");
+  }
+  const error = new Error("JavaScript execution was aborted.");
+  error.name = "AbortError";
+  return error;
+}
+
 function isSandboxMessage(
   value: unknown,
   runId: string,
@@ -246,28 +255,43 @@ export function createSandboxHtml(runId: string, parentOrigin: string): string {
     `;
 }
 
-export async function runInSandbox(code: string): Promise<string> {
+export async function runInSandbox(
+  code: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (signal?.aborted) throw createSandboxAbortError();
+
   if (code.length > BROWSER_SANDBOX_LIMITS.maxCodeChars) {
     return `Error: JavaScript code is too large to run in the browser sandbox.`;
   }
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const iframe = document.createElement("iframe");
     const runId = createSandboxRunId();
     const parentOrigin = getParentMessageOrigin();
     let timeoutId = 0;
-
-    iframe.style.display = "none";
-    iframe.setAttribute("sandbox", "allow-scripts");
-    document.body.appendChild(iframe);
+    let settled = false;
 
     const cleanup = () => {
       window.clearTimeout(timeoutId);
       window.removeEventListener("message", messageHandler);
+      signal?.removeEventListener("abort", abortHandler);
       iframe.remove();
     };
 
+    const settle = (complete: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      complete();
+    };
+
+    const abortHandler = () => {
+      settle(() => reject(createSandboxAbortError()));
+    };
+
     const messageHandler = (event: MessageEvent) => {
+      if (settled) return;
       if (event.source !== iframe.contentWindow) return;
       if (!isSandboxMessage(event.data, runId)) return;
 
@@ -277,23 +301,36 @@ export async function runInSandbox(code: string): Promise<string> {
         return;
       }
 
-      cleanup();
-      if (event.data.success) {
-        resolve(event.data.output || "undefined");
+      settle(() => {
+        if (event.data.success) {
+          resolve(event.data.output || "undefined");
+          return;
+        }
+
+        const errorMsg = event.data.output
+          ? `${event.data.output}\nError: ${event.data.error}`
+          : `Error: ${event.data.error}`;
+        resolve(errorMsg);
+      });
+    };
+
+    try {
+      iframe.style.display = "none";
+      iframe.setAttribute("sandbox", "allow-scripts");
+      window.addEventListener("message", messageHandler);
+      signal?.addEventListener("abort", abortHandler, { once: true });
+      if (signal?.aborted) {
+        abortHandler();
         return;
       }
 
-      const errorMsg = event.data.output
-        ? `${event.data.output}\nError: ${event.data.error}`
-        : `Error: ${event.data.error}`;
-      resolve(errorMsg);
-    };
-
-    window.addEventListener("message", messageHandler);
-    timeoutId = window.setTimeout(() => {
-      cleanup();
-      resolve("Error: JavaScript execution timed out.");
-    }, BROWSER_SANDBOX_LIMITS.executionTimeoutMs);
-    iframe.srcdoc = createSandboxHtml(runId, parentOrigin);
+      document.body.appendChild(iframe);
+      timeoutId = window.setTimeout(() => {
+        settle(() => resolve("Error: JavaScript execution timed out."));
+      }, BROWSER_SANDBOX_LIMITS.executionTimeoutMs);
+      iframe.srcdoc = createSandboxHtml(runId, parentOrigin);
+    } catch (error) {
+      settle(() => reject(error));
+    }
   });
 }

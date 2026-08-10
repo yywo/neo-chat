@@ -8,6 +8,7 @@
   "listening": "正在聆听…",
   "recording": "正在录音…",
   "askAnything": "随便问点什么…",
+  "offlineDraftSaved": "离线草稿：已保存在本地，恢复网络后可发送。",
   "dismissError": "关闭消息输入错误提示",
   "attach": "附件",
   "attachFiles": "添加附件",
@@ -39,6 +40,10 @@
   "searchUnavailableApiKey": "{provider} 搜索需要先在设置中填写 API Key。",
   "searchUnavailableBaseUrl": "{provider} 搜索需要先在设置中填写 Base URL。",
   "searchUnavailableGeneric": "当前配置下无法使用搜索。",
+  "enableAgentMode": "启用 Agent 模式",
+  "disableAgentMode": "关闭 Agent 模式",
+  "agentModeUnavailable": "Agent 模式需要支持工具调用的模型。",
+  "agentSearchRequiresExternalProvider": "Agent 模式的网页搜索需要外部搜索服务。搜索开关仍保持开启，但 web_search 工具当前不可用。",
   "enableReasoning": "启用推理",
   "disableReasoning": "禁用推理",
   "enableReasoningAria": "启用推理",
@@ -89,5 +94,8 @@
   "activeSkillsCount": "{count} 个已启用技能",
   "activeSkillsAria": "{count} 个已启用技能",
   "installedSkills": "已安装技能",
-  "noSkillsAvailable": "暂无可用技能。"
+  "noSkillsAvailable": "暂无可用技能。",
+  "openReplySource": "打开被引用的消息",
+  "replySourceUnavailable": "原消息不可用",
+  "cancelReply": "取消引用回复"
 }

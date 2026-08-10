@@ -4,6 +4,7 @@ import {
   ModelMetadata,
   SearchProviderID,
   SearchServiceConfig,
+  SearchTimeRange,
   Plugin,
   PluginConfig,
   LobeAgent,
@@ -14,10 +15,14 @@ import {
   TextSkill,
   SkillCatalog,
   SkillDataLocale,
+  SkillBundle,
 } from "@/types";
 import { BUILT_IN_PLUGINS, UNSPLASH_PLUGIN } from "@/config/plugins";
 import { DEFAULT_SYSTEM_SETTINGS } from "@/config/defaults";
-import { PublicServerConfig } from "@/lib/defaultConfig/shared";
+import {
+  PublicServerConfig,
+  SERVER_DEFAULT_PROVIDER_ID,
+} from "@/lib/defaultConfig/shared";
 import {
   STORAGE_KEYS,
   STORAGE_VERSION,
@@ -48,6 +53,10 @@ import {
   normalizeSearchSettings,
 } from "@/lib/settings/searchRag";
 import { getDefaultModelSelectValue } from "@/lib/utils/defaultModels";
+import {
+  getProviderModelMetadataKey,
+  resolveProviderModelMetadata,
+} from "@/lib/utils/model";
 import { readJsonResponseOrThrow } from "@/lib/api/client";
 import {
   isPluginAuthRequired,
@@ -58,6 +67,7 @@ import {
 import {
   normalizeCustomSkills,
   normalizeSkillCatalog,
+  normalizeSkillBundles,
   normalizeTextSkill,
 } from "@/lib/skills";
 import { normalizeSystemSettings } from "@/lib/settings/appConfig";
@@ -126,13 +136,18 @@ interface SettingsState {
   modelMetadata: Record<string, ModelMetadata>;
   modelMetadataTimestamp: number;
   customModelMetadata: Record<string, ModelMetadata>;
-  setCustomModelMetadata: (id: string, meta: ModelMetadata) => void;
+  setCustomModelMetadata: (
+    providerId: string,
+    id: string,
+    meta: ModelMetadata,
+  ) => void;
   fetchModelMetadata: (forceRefresh?: boolean) => Promise<void>;
 
   // Search Settings
   search: {
     provider: SearchProviderID;
     resultsLimit: number;
+    timeRange: SearchTimeRange;
     configs: Record<string, SearchServiceConfig>;
   };
   setSearchProvider: (provider: SearchProviderID) => void;
@@ -141,6 +156,7 @@ interface SettingsState {
     config: Partial<SearchServiceConfig>,
   ) => void;
   setSearchResultsLimit: (limit: number) => void;
+  setSearchTimeRange: (timeRange: SearchTimeRange) => void;
 
   // RAG Settings
   rag: RAGConfig;
@@ -167,6 +183,8 @@ interface SettingsState {
   customSkills: TextSkill[];
   activeSkillIds: string[];
   skillAutoSelect: boolean;
+  skillBundles: SkillBundle[];
+  activeSkillBundleIds: string[];
   installSkill: (skill: TextSkill) => void;
   uninstallSkill: (skillId: string) => void;
   updateInstalledSkill: (skillId: string, skill: Partial<TextSkill>) => void;
@@ -176,6 +194,11 @@ interface SettingsState {
   setActiveSkillIds: (skillIds: string[]) => void;
   toggleSkillActive: (skillId: string) => void;
   setSkillAutoSelect: (enabled: boolean) => void;
+  addSkillBundle: (bundle: SkillBundle) => void;
+  updateSkillBundle: (bundleId: string, bundle: Partial<SkillBundle>) => void;
+  removeSkillBundle: (bundleId: string) => void;
+  setActiveSkillBundleIds: (bundleIds: string[]) => void;
+  toggleSkillBundleActive: (bundleId: string) => void;
 
   // Agent Management
   customAgents: LobeAgent[];
@@ -401,8 +424,15 @@ export const useSettingsStore = create<SettingsState>()(
           );
           const nextCustomModelMetadata = { ...state.customModelMetadata };
           for (const [id, metadata] of Object.entries(serverModelMetadata)) {
-            if (!nextCustomModelMetadata[id]) {
-              nextCustomModelMetadata[id] = metadata;
+            const qualifiedKey = getProviderModelMetadataKey(
+              SERVER_DEFAULT_PROVIDER_ID,
+              id,
+            );
+            if (
+              !nextCustomModelMetadata[qualifiedKey] &&
+              !nextCustomModelMetadata[id]
+            ) {
+              nextCustomModelMetadata[qualifiedKey] = metadata;
             }
           }
 
@@ -570,7 +600,7 @@ export const useSettingsStore = create<SettingsState>()(
       modelMetadata: {},
       modelMetadataTimestamp: 0,
       customModelMetadata: {},
-      setCustomModelMetadata: (id, meta) =>
+      setCustomModelMetadata: (providerId, id, meta) =>
         set((state) => {
           const metadata = normalizeModelMetadata(meta, id);
           if (!metadata) return state;
@@ -578,7 +608,7 @@ export const useSettingsStore = create<SettingsState>()(
           return {
             customModelMetadata: {
               ...state.customModelMetadata,
-              [metadata.id]: metadata,
+              [getProviderModelMetadataKey(providerId, metadata.id)]: metadata,
             },
           };
         }),
@@ -617,6 +647,7 @@ export const useSettingsStore = create<SettingsState>()(
       search: {
         provider: "firecrawl",
         resultsLimit: 5,
+        timeRange: "any",
         configs: {
           tavily: { apiKey: "" },
           firecrawl: { apiKey: "" },
@@ -655,6 +686,13 @@ export const useSettingsStore = create<SettingsState>()(
           search: normalizeSearchSettings({
             ...state.search,
             resultsLimit: limit,
+          }),
+        })),
+      setSearchTimeRange: (timeRange) =>
+        set((state) => ({
+          search: normalizeSearchSettings({
+            ...state.search,
+            timeRange,
           }),
         })),
 
@@ -888,6 +926,8 @@ export const useSettingsStore = create<SettingsState>()(
       customSkills: [],
       activeSkillIds: [],
       skillAutoSelect: true,
+      skillBundles: [],
+      activeSkillBundleIds: [],
 
       installSkill: (skill) =>
         set((state) => {
@@ -1085,6 +1125,73 @@ export const useSettingsStore = create<SettingsState>()(
 
       setSkillAutoSelect: (enabled) => set({ skillAutoSelect: enabled }),
 
+      addSkillBundle: (bundle) =>
+        set((state) => ({
+          skillBundles: normalizeSkillBundles(
+            [
+              {
+                ...bundle,
+                createdAt: bundle.createdAt || new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              },
+              ...state.skillBundles.filter((item) => item.id !== bundle.id),
+            ],
+            MARKET_LIMITS.maxCustomSkills,
+          ),
+        })),
+
+      updateSkillBundle: (bundleId, bundle) =>
+        set((state) => ({
+          skillBundles: normalizeSkillBundles(
+            state.skillBundles.map((current) =>
+              current.id === bundleId
+                ? {
+                    ...current,
+                    ...bundle,
+                    id: current.id,
+                    updatedAt: new Date().toISOString(),
+                  }
+                : current,
+            ),
+            MARKET_LIMITS.maxCustomSkills,
+          ),
+        })),
+
+      removeSkillBundle: (bundleId) =>
+        set((state) => ({
+          skillBundles: state.skillBundles.filter(
+            (bundle) => bundle.id !== bundleId,
+          ),
+          activeSkillBundleIds: state.activeSkillBundleIds.filter(
+            (id) => id !== bundleId,
+          ),
+        })),
+
+      setActiveSkillBundleIds: (bundleIds) =>
+        set((state) => {
+          const validIds = new Set(
+            state.skillBundles.map((bundle) => bundle.id),
+          );
+          return {
+            activeSkillBundleIds: normalizeSkillIdRefsForStorage(
+              bundleIds,
+              20,
+            ).filter((id) => validIds.has(id)),
+          };
+        }),
+
+      toggleSkillBundleActive: (bundleId) =>
+        set((state) => {
+          if (!state.skillBundles.some((bundle) => bundle.id === bundleId)) {
+            return state;
+          }
+          return {
+            activeSkillBundleIds: state.activeSkillBundleIds.includes(bundleId)
+              ? state.activeSkillBundleIds.filter((id) => id !== bundleId)
+              : [...state.activeSkillBundleIds, bundleId],
+          };
+        }),
+
       // Agent Management
       customAgents: [],
       usedAgents: [],
@@ -1273,6 +1380,7 @@ export const useSettingsStore = create<SettingsState>()(
           modelMetadataTimestamp: state.modelMetadataTimestamp || 0,
           customModelMetadata: normalizeModelMetadataMap(
             state.customModelMetadata,
+            { preserveKeys: true },
           ),
           search,
           rag,
@@ -1299,6 +1407,14 @@ export const useSettingsStore = create<SettingsState>()(
             typeof state.skillAutoSelect === "boolean"
               ? state.skillAutoSelect
               : true,
+          skillBundles: normalizeSkillBundles(
+            state.skillBundles,
+            MARKET_LIMITS.maxCustomSkills,
+          ),
+          activeSkillBundleIds: normalizeSkillIdRefsForStorage(
+            state.activeSkillBundleIds,
+            20,
+          ),
           customAgents: normalizeLocalAgents(
             state.customAgents,
             MARKET_LIMITS.maxCustomAgents,
@@ -1309,6 +1425,21 @@ export const useSettingsStore = create<SettingsState>()(
           ),
           agentOverrides: normalizeAgentOverrides(state.agentOverrides),
         } as SettingsState;
+      },
+      merge: (persistedState, currentState) => {
+        const persisted =
+          persistedState && typeof persistedState === "object"
+            ? (persistedState as Partial<SettingsState>)
+            : {};
+
+        return {
+          ...currentState,
+          ...persisted,
+          system: normalizeSystemSettings(
+            persisted.system,
+            DEFAULT_SYSTEM_SETTINGS,
+          ),
+        };
       },
       partialize: (state) => ({
         marketPlugins: state.marketPlugins,
@@ -1336,6 +1467,8 @@ export const useSettingsStore = create<SettingsState>()(
         customSkills: state.customSkills,
         activeSkillIds: state.activeSkillIds,
         skillAutoSelect: state.skillAutoSelect,
+        skillBundles: state.skillBundles,
+        activeSkillBundleIds: state.activeSkillBundleIds,
         customAgents: state.customAgents,
         usedAgents: state.usedAgents,
         agentOverrides: state.agentOverrides,
@@ -1363,11 +1496,17 @@ export const formatModelName = (
   id: string,
   metadata?: Record<string, ModelMetadata>,
   customMetadata?: Record<string, ModelMetadata>,
+  providerId?: string,
 ): string => {
   if (!id) return "";
 
   // Priority: custom metadata > fetched metadata > fallback formatting
-  const name = customMetadata?.[id]?.name || metadata?.[id]?.name;
+  const name = resolveProviderModelMetadata({
+    providerId,
+    modelName: id,
+    modelMetadata: metadata || {},
+    customModelMetadata: customMetadata || {},
+  })?.name;
   if (name) return name;
 
   // Fallback: format the ID

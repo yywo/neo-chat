@@ -4,11 +4,13 @@ import type {
   SkillCatalog,
   SkillCatalogEntry,
   SkillDataLocale,
+  SkillBundle,
   TextSkill,
 } from "@/types";
 import { useSettingsStore } from "@/store/core/settingsStore";
 import {
   buildSkillPromptContext,
+  createSkillDefinitionHash,
   createSkillInvocations,
   createSkillSelectionTool,
   createSkillSelectionToolPrompt,
@@ -19,6 +21,9 @@ import {
   parseSkillSelectionToolCall,
   recallSkillCandidates,
   resolveSkillDataLocale,
+  resolveSkillBundle,
+  getMissingSkillParameters,
+  resolveSkillParameterValues,
   selectSkillsForMessage,
 } from "@/lib/skills";
 import { readJsonResponseOrThrow } from "@/lib/api/client";
@@ -293,6 +298,10 @@ export async function resolveSkillsForMessage({
   installedSkills,
   customSkills = [],
   activeSkillIds,
+  skillBundles = [],
+  activeSkillBundleIds = [],
+  skillParameterValues = {},
+  skillBundleParameterValues = {},
   autoSelect,
   signal,
 }: {
@@ -302,12 +311,17 @@ export async function resolveSkillsForMessage({
   installedSkills?: readonly TextSkill[];
   customSkills?: readonly TextSkill[];
   activeSkillIds: readonly string[];
+  skillBundles?: readonly SkillBundle[];
+  activeSkillBundleIds?: readonly string[];
+  skillParameterValues?: Readonly<Record<string, Record<string, string>>>;
+  skillBundleParameterValues?: Readonly<Record<string, Record<string, string>>>;
   autoSelect: boolean;
   signal?: AbortSignal;
 }): Promise<{
   appliedSkills: AppliedSkill[];
   invocations: AppliedSkillInvocation[];
   context: string;
+  skippedSkillIds: string[];
 }> {
   const skills: TextSkill[] = [];
   const seenSkillIds = new Set<string>();
@@ -319,49 +333,80 @@ export async function resolveSkillsForMessage({
   }
 
   const activeIds = normalizeSkillIdRefs(activeSkillIds, skills);
-  if (activeIds.length === 0) {
-    return {
-      appliedSkills: [],
-      invocations: [],
-      context: "",
-    };
-  }
-
   const skillsById = new Map(skills.map((skill) => [skill.id, skill]));
   const activeSkills = activeIds
     .map((id) => skillsById.get(id))
     .filter((skill): skill is TextSkill => Boolean(skill));
-  if (activeSkills.length === 0) {
+  const bundlesById = new Map(
+    skillBundles.map((bundle) => [bundle.id, bundle]),
+  );
+  const bundleSkills: AppliedSkill[] = [];
+  for (const bundleId of activeSkillBundleIds) {
+    const bundle = bundlesById.get(bundleId);
+    if (!bundle) continue;
+    bundleSkills.push(
+      ...resolveSkillBundle({
+        bundle,
+        skills,
+        values: skillBundleParameterValues[bundle.id],
+      }),
+    );
+    if (bundleSkills.length >= 4) break;
+  }
+
+  if (activeSkills.length === 0 && bundleSkills.length === 0) {
     return {
       appliedSkills: [],
       invocations: [],
       context: "",
+      skippedSkillIds: [],
     };
   }
 
   let appliedSkills: AppliedSkill[] = [];
   if (!autoSelect) {
-    appliedSkills = activeSkills.map((skill) => ({ skill, mode: "manual" }));
+    appliedSkills = [
+      ...bundleSkills,
+      ...activeSkills.map((skill) => ({
+        skill,
+        mode: "manual" as const,
+        parameters: resolveSkillParameterValues(
+          skill,
+          skillParameterValues[skill.id],
+        ),
+      })),
+    ];
+    const seen = new Set<string>();
+    appliedSkills = appliedSkills.filter(({ skill }) => {
+      if (seen.has(skill.id) || seen.size >= 4) return false;
+      seen.add(skill.id);
+      return true;
+    });
     const context = buildSkillPromptContext({ skills: appliedSkills });
     return {
       appliedSkills,
       invocations: createSkillInvocations(appliedSkills),
       context,
+      skippedSkillIds: [],
     };
   }
 
   let selectedSkillIds: string[] | null = null;
   try {
-    const toolCall = await streamGenerateToolCall(
-      selectedModel,
-      createSkillSelectionToolPrompt({ message, skills: activeSkills }),
-      [createSkillSelectionTool({ skills: activeSkills })],
-      signal,
-    );
-    const selection = parseSkillSelectionToolCall(toolCall, activeSkills);
+    if (activeSkills.length === 0) {
+      selectedSkillIds = [];
+    } else {
+      const toolCall = await streamGenerateToolCall(
+        selectedModel,
+        createSkillSelectionToolPrompt({ message, skills: activeSkills }),
+        [createSkillSelectionTool({ skills: activeSkills })],
+        signal,
+      );
+      const selection = parseSkillSelectionToolCall(toolCall, activeSkills);
 
-    if (selection) {
-      selectedSkillIds = selection.selectedSkillIds;
+      if (selection) {
+        selectedSkillIds = selection.selectedSkillIds;
+      }
     }
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
@@ -370,11 +415,28 @@ export async function resolveSkillsForMessage({
     logDevWarn("Skill selection tool call failed:", error);
   }
 
+  let skippedSkillIds: string[] = [];
   if (selectedSkillIds) {
-    appliedSkills = selectedSkillIds
+    const selectedSkills = selectedSkillIds
       .map((id) => skillsById.get(id))
-      .filter((skill): skill is TextSkill => Boolean(skill))
-      .map((skill) => ({ skill, mode: "auto" }));
+      .filter((skill): skill is TextSkill => Boolean(skill));
+    skippedSkillIds = selectedSkills
+      .filter(
+        (skill) =>
+          getMissingSkillParameters(skill, skillParameterValues[skill.id])
+            .length > 0,
+      )
+      .map((skill) => skill.id);
+    appliedSkills = selectedSkills
+      .filter((skill) => !skippedSkillIds.includes(skill.id))
+      .map((skill) => ({
+        skill,
+        mode: "auto",
+        parameters: resolveSkillParameterValues(
+          skill,
+          skillParameterValues[skill.id],
+        ),
+      }));
   } else {
     const fallbackSelection = await selectSkillsForMessage({
       message,
@@ -382,16 +444,91 @@ export async function resolveSkillsForMessage({
       manualSkillIds: [],
       autoSelect: true,
     });
-    appliedSkills = fallbackSelection
+    const fallbackSkills = fallbackSelection
       .map(({ skill }) => skillsById.get(skill.id))
-      .filter((skill): skill is TextSkill => Boolean(skill))
-      .map((skill) => ({ skill, mode: "auto" }));
+      .filter((skill): skill is TextSkill => Boolean(skill));
+    skippedSkillIds = fallbackSkills
+      .filter(
+        (skill) =>
+          getMissingSkillParameters(skill, skillParameterValues[skill.id])
+            .length > 0,
+      )
+      .map((skill) => skill.id);
+    appliedSkills = fallbackSkills
+      .filter((skill) => !skippedSkillIds.includes(skill.id))
+      .map((skill) => ({
+        skill,
+        mode: "auto",
+        parameters: resolveSkillParameterValues(
+          skill,
+          skillParameterValues[skill.id],
+        ),
+      }));
   }
+
+  const autoSeen = new Set<string>();
+  appliedSkills = [...bundleSkills, ...appliedSkills]
+    .filter(({ skill }) => {
+      if (autoSeen.has(skill.id)) return false;
+      autoSeen.add(skill.id);
+      return true;
+    })
+    .slice(0, 4);
 
   const context = buildSkillPromptContext({ skills: appliedSkills });
   return {
     appliedSkills,
     invocations: createSkillInvocations(appliedSkills),
     context,
+    skippedSkillIds,
+  };
+}
+
+export function resolveRecordedSkillInvocations({
+  invocations,
+  installedSkills,
+}: {
+  invocations: readonly AppliedSkillInvocation[];
+  installedSkills: readonly TextSkill[];
+}): {
+  appliedSkills: AppliedSkill[];
+  invocations: AppliedSkillInvocation[];
+  context: string;
+  skippedSkillIds: string[];
+} {
+  const skillsById = new Map(
+    installedSkills
+      .map(normalizeTextSkill)
+      .filter((skill): skill is TextSkill => Boolean(skill))
+      .map((skill) => [skill.id, skill]),
+  );
+  const appliedSkills = [...invocations]
+    .sort((left, right) => (left.order || 0) - (right.order || 0))
+    .map((invocation) => {
+      const skill = skillsById.get(invocation.id);
+      if (!skill) {
+        throw new Error(
+          `Recorded skill is no longer installed: ${invocation.id}`,
+        );
+      }
+      if (
+        invocation.definitionHash &&
+        invocation.definitionHash !== createSkillDefinitionHash(skill)
+      ) {
+        throw new Error(`Recorded skill has changed: ${invocation.id}`);
+      }
+      return {
+        skill,
+        mode: invocation.mode,
+        parameters: resolveSkillParameterValues(skill, invocation.parameters),
+        bundleId: invocation.bundleId,
+      } satisfies AppliedSkill;
+    });
+
+  return {
+    appliedSkills,
+    invocations: createSkillInvocations(appliedSkills),
+    context: buildSkillPromptContext({ skills: appliedSkills }),
+    skippedSkillIds: [],
   };
 }

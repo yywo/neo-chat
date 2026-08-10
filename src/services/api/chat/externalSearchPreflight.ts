@@ -9,6 +9,7 @@ import {
   allocateContextBudget,
   trimTextToEstimatedTokens,
 } from "@/lib/chat/contextBudget";
+import { parseModelString } from "@/lib/utils/model";
 import { appendContextToChatInput } from "@/lib/utils/chatInput";
 import { logDevWarn } from "@/lib/utils/devLogger";
 import {
@@ -159,7 +160,10 @@ export async function runExternalSearchPreflight({
         sources: searchResults.sources,
         images: searchResults.images,
       });
-      const metadata = resolveModelMetadata(modelName);
+      const metadata = resolveModelMetadata(
+        modelName,
+        parseModelString(model).providerId,
+      );
       const budget = allocateContextBudget({
         modelInputTokenLimit: metadata?.limit?.context,
         reservedOutputTokens: metadata?.limit?.output,

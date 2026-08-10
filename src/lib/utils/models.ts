@@ -95,6 +95,7 @@ export const buildAvailableModels = (
     modelId: string,
     modelMetadata: Record<string, any>,
     customModelMetadata: Record<string, any>,
+    providerId?: string,
   ) => string | null,
 ): ModelInfo[] => {
   const allModels: ModelInfo[] = [];
@@ -103,7 +104,7 @@ export const buildAvailableModels = (
     if (p.enabled && p.models && p.models.length > 0) {
       p.models.forEach((modelId: string) => {
         const displayName =
-          formatModelName(modelId, modelMetadata, customModelMetadata) ||
+          formatModelName(modelId, modelMetadata, customModelMetadata, p.id) ||
           modelId;
 
         allModels.push({

@@ -1,7 +1,16 @@
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+const require = createRequire(import.meta.url);
+const wranglerPackagePath = require.resolve("wrangler/package.json");
+const wranglerPackage = JSON.parse(readFileSync(wranglerPackagePath, "utf8"));
+const wranglerScript =
+  process.env.WRANGLER_SCRIPT ||
+  resolve(dirname(wranglerPackagePath), wranglerPackage.bin.wrangler);
 const budgetBytes = Number.parseInt(
   process.env.WORKER_GZIP_BUDGET_BYTES || "",
   10,
@@ -37,11 +46,9 @@ function parseWranglerDryRunOutput(output) {
 }
 
 try {
-  const wranglerCommand =
-    process.platform === "win32" ? "wrangler.cmd" : "wrangler";
   const { stdout, stderr } = await execFileAsync(
-    wranglerCommand,
-    ["deploy", "--dry-run", "--config", "wrangler.jsonc"],
+    process.execPath,
+    [wranglerScript, "deploy", "--dry-run", "--config", "wrangler.jsonc"],
     {
       cwd: process.cwd(),
       maxBuffer: 10 * 1024 * 1024,

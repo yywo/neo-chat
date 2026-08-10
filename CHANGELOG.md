@@ -7,6 +7,85 @@ group changes under a level-2 heading that matches the release tag, such as
 `## v2.0.0`; the release workflow uses that section as the GitHub release notes
 when the matching tag is pushed.
 
+## v2.4.0
+
+- **Private cross-device vault:** Added opt-in WebDAV and S3/MinIO sync with
+  per-domain Automerge documents, client-side HKDF/AES-GCM encryption,
+  opaque remote object names, encrypted OPFS chunks, device state, recovery
+  codes, deterministic conflict handling, transactional local application, and
+  no server-side credential or plaintext persistence. ZIP export remains
+  version 3 and deliberately excludes sync keys, credentials, baselines, and
+  device identity.
+- **Remote MCP compatibility:** Added legacy SSE support alongside Streamable
+  HTTP, preferring Streamable HTTP and falling back only when initial connection
+  setup returns 404 or 405. The negotiated transport is persisted for later
+  tool calls, authentication failures remain visible, and Registry servers that
+  require header credentials now collect them before discovery and keep them in
+  local encrypted-secret storage.
+- **Local MCP bridge:** Added an optional hardened Docker profile that exposes
+  deployment-admin allowlisted stdio MCP servers through authenticated
+  Streamable HTTP. Commands and environment variables come only from a
+  read-only configuration file; the bridge runs unprivileged with bounded
+  output, timeouts, restart backoff, and redacted logs.
+- **Long-chat reliability:** Virtualized message timelines with dynamic row
+  measurement, stable end anchoring, screen-proximity rendering for expensive
+  diagrams, durable streaming checkpoints, bounded pre-output retries, partial
+  output preservation, and guarded continuation after interruptions.
+- **Message and session workflows:** Added reply snapshots and jump navigation,
+  explicit interrupted-generation ownership, model-selectable sibling-branch
+  regeneration, per-chat composer drafts, and a token/context usage summary
+  with a clearly marked estimate when providers omit usage. Message edits,
+  deletion, retraction, and branch switches are guarded during generation while
+  the existing context-compression pipeline remains intact.
+- **Agent mode:** Added a per-chat, tool-capability-gated client orchestration
+  mode with localized web search, knowledge search, text-only skill loading,
+  bounded sandboxed JavaScript, and task-plan tools. The five read-only
+  built-ins are auto-approved, and Agent web search requires an external search
+  provider rather than native Google Search or OpenAI Web Search.
+- **Parameterized Skills:** Upgraded custom Skills to a compatible schema with
+  validated text, textarea, and select parameters; reproducible invocation
+  metadata; and ordered bundles of up to four non-nested Skills with fixed or
+  mapped inputs.
+- **Knowledge productivity and retrieval:** Added collection-level
+  Markdown-aware or recursive chunking, preview and explicit reindex controls,
+  chunk-level lexical search, vector-plus-keyword reciprocal-rank fusion,
+  lexical fallback, and stable source previews with retrieval-method labels.
+  Knowledge files can now be filtered by name or status and processed through
+  serial batch retry, reindex, download, and confirmed-delete workflows with
+  per-file failure reporting.
+- **Automatic image compression:** Added configurable client-side compression
+  for supported conversation, workspace, generated, and plugin images before
+  storage or model use. The pipeline is cancellable, skips the dimension limit
+  for extreme-aspect images, preserves the source format and name, and falls
+  back to the original whenever compression fails or does not reduce the
+  payload.
+- **Local offline PWA:** Added a local-deployment-only application shell for
+  offline history, branch navigation, local search, knowledge reading, and
+  backup export. API routes, streams, model traffic, sync, MCP, user files, and
+  external requests are never cached; hosted deployments unregister workers and
+  remove application caches.
+- **Navigation, settings, and onboarding:** Promoted global search to an
+  accessible, focus-managed modal, added localized settings search and a
+  first-run path to Provider settings when no model is available, and improved
+  mobile panel navigation, default-title localization, collapsed-sidebar
+  semantics, and offline draft guidance.
+- **Provider and model safety:** Scoped custom model metadata to each provider
+  so same-named models can retain independent capabilities. Hardened locally
+  encrypted credentials for server-default providers, bound their reuse to a
+  matching provider type, rejected missing or mismatched deployment defaults,
+  validated provider Base URLs, and handled empty default-model lists without
+  synthesizing unavailable choices.
+- **Search and presentation fixes:** Applied the selected time range to
+  Firecrawl instead of forcing a one-week filter, removed duplicate Agent web
+  search tool details while retaining the dedicated source presentation, and
+  simplified the model picker by removing capability preflight copy while
+  preserving the underlying capability gates.
+- **Compatibility and engineering:** Advanced local storage schema to version
+  6 while retaining ZIP export version 3, added read-only quota and OPFS
+  reference health diagnostics, expanded English, Chinese, and Japanese copy,
+  and broadened security, migration, convergence, performance, offline,
+  accessibility, provider, MCP, and container regression coverage.
+
 ## v2.3.0
 
 - **Local search and navigation:** Added a local global search center, available

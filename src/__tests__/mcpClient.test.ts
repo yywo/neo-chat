@@ -115,4 +115,117 @@ describe("MCP client transport safety", () => {
 
     await expect(response.text()).rejects.toThrow(/too large/i);
   });
+
+  it("falls back to legacy SSE after a streamable HTTP 405", async () => {
+    const encoder = new TextEncoder();
+    let sseController:
+      ReadableStreamDefaultController<Uint8Array<ArrayBufferLike>> | undefined;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url,
+        );
+        const method = String(init?.method || "GET").toUpperCase();
+
+        if (url.pathname === "/sse" && method === "POST") {
+          return new Response("Cannot POST /sse", { status: 405 });
+        }
+
+        if (url.pathname === "/sse" && method === "GET") {
+          const stream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              sseController = controller;
+              controller.enqueue(
+                encoder.encode("event: endpoint\ndata: /messages\n\n"),
+              );
+            },
+          });
+          return new Response(stream, {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+
+        if (url.pathname === "/messages" && method === "POST") {
+          const message = JSON.parse(String(init?.body || "{}"));
+          if (message.method === "initialize") {
+            sseController?.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: message.id,
+                  result: {
+                    protocolVersion: "2025-11-25",
+                    capabilities: { tools: {} },
+                    serverInfo: { name: "legacy-sse", version: "1.0.0" },
+                  },
+                })}\n\n`,
+              ),
+            );
+          } else if (message.method === "tools/list") {
+            sseController?.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: message.id,
+                  result: {
+                    tools: [
+                      {
+                        name: "legacy-search",
+                        description: "Search a legacy MCP server.",
+                        inputSchema: { type: "object", properties: {} },
+                      },
+                    ],
+                  },
+                })}\n\n`,
+              ),
+            );
+          }
+          return new Response(null, { status: 202 });
+        }
+
+        return new Response("Not found", { status: 404 });
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { discoverMcpTools } = await import("../lib/mcp/client");
+    const result = await discoverMcpTools({
+      serverUrl: "https://93.184.216.34/sse",
+      timeoutMs: 5_000,
+    });
+
+    expect(result).toMatchObject({
+      transport: "sse",
+      tools: [{ name: "legacy-search" }],
+    });
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          new URL(
+            typeof input === "string" || input instanceof URL
+              ? input
+              : input.url,
+          ).pathname === "/sse" &&
+          String(init?.method || "GET").toUpperCase() === "GET",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not fall back to SSE after an authentication failure", async () => {
+    const fetchMock = vi.fn(
+      async () => new Response("Authentication required", { status: 401 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { discoverMcpTools } = await import("../lib/mcp/client");
+
+    await expect(
+      discoverMcpTools({
+        serverUrl: "https://93.184.216.34/mcp",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow(/401|authentication/i);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

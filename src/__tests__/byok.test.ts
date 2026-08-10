@@ -20,6 +20,19 @@ const originalEnv = {
   BYOK_ALLOW_EPHEMERAL_KEY: process.env.BYOK_ALLOW_EPHEMERAL_KEY,
   BYOK_KEY_ID: process.env.BYOK_KEY_ID,
   BYOK_PRIVATE_KEY_PEM: process.env.BYOK_PRIVATE_KEY_PEM,
+  DEFAULT_MODEL_CONTEXT_COMPRESSION:
+    process.env.DEFAULT_MODEL_CONTEXT_COMPRESSION,
+  DEFAULT_MODEL_MEMORY: process.env.DEFAULT_MODEL_MEMORY,
+  DEFAULT_MODEL_PROMPT_OPTIMIZATION:
+    process.env.DEFAULT_MODEL_PROMPT_OPTIMIZATION,
+  DEFAULT_MODEL_RAG_QUERY: process.env.DEFAULT_MODEL_RAG_QUERY,
+  DEFAULT_MODEL_RELATED_QUESTIONS: process.env.DEFAULT_MODEL_RELATED_QUESTIONS,
+  DEFAULT_MODEL_TITLE_GENERATION: process.env.DEFAULT_MODEL_TITLE_GENERATION,
+  DEFAULT_PROVIDER_API_KEY: process.env.DEFAULT_PROVIDER_API_KEY,
+  DEFAULT_PROVIDER_BASE_URL: process.env.DEFAULT_PROVIDER_BASE_URL,
+  DEFAULT_PROVIDER_MODELS: process.env.DEFAULT_PROVIDER_MODELS,
+  DEFAULT_PROVIDER_NAME: process.env.DEFAULT_PROVIDER_NAME,
+  DEFAULT_PROVIDER_TYPE: process.env.DEFAULT_PROVIDER_TYPE,
   NODE_ENV: process.env.NODE_ENV,
 };
 
@@ -35,6 +48,17 @@ function restoreEnv() {
 
 function setEnv(key: string, value: string) {
   (process.env as Record<string, string | undefined>)[key] = value;
+}
+
+function clearDefaultProviderEnv() {
+  for (const key of Object.keys(originalEnv)) {
+    if (
+      key.startsWith("DEFAULT_MODEL_") ||
+      key.startsWith("DEFAULT_PROVIDER_")
+    ) {
+      delete process.env[key];
+    }
+  }
 }
 
 function resetByokKeyMaterial() {
@@ -293,6 +317,86 @@ describe("BYOK secret envelopes", () => {
       },
     );
   });
+
+  it("rejects browser credentials when the server-default provider is unavailable", async () => {
+    clearDefaultProviderEnv();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json(await getByokPublicKey()),
+    );
+    const apiKeySecret = await encryptSecret(
+      "browser-secret",
+      "provider:OpenAI",
+    );
+    const provider = ProviderRuntimeConfigSchema.parse({
+      type: "OpenAI",
+      source: "server-default",
+      apiKeySecret,
+    });
+
+    await expect(resolveProviderRuntimeConfig(provider)).rejects.toMatchObject({
+      name: "ApiError",
+      statusCode: 503,
+      code: "SERVER_DEFAULT_PROVIDER_UNAVAILABLE",
+    });
+  });
+
+  it("rejects browser credentials when the server-default provider type changed", async () => {
+    clearDefaultProviderEnv();
+    setEnv("DEFAULT_PROVIDER_TYPE", "Anthropic");
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json(await getByokPublicKey()),
+    );
+    const apiKeySecret = await encryptSecret(
+      "browser-secret",
+      "provider:OpenAI",
+    );
+    const provider = ProviderRuntimeConfigSchema.parse({
+      type: "OpenAI",
+      source: "server-default",
+      apiKeySecret,
+    });
+
+    await expect(resolveProviderRuntimeConfig(provider)).rejects.toMatchObject({
+      name: "ValidationError",
+      statusCode: 400,
+      code: "VALIDATION_ERROR",
+    });
+  });
+
+  it.each([
+    ["overrides", "server-secret"],
+    ["supplements", undefined],
+  ])(
+    "%s browser credentials only with the current server-default provider type",
+    async (_action, serverApiKey) => {
+      clearDefaultProviderEnv();
+      setEnv("DEFAULT_PROVIDER_TYPE", "OpenAI");
+      setEnv("DEFAULT_PROVIDER_NAME", "Current default");
+      setEnv("DEFAULT_PROVIDER_BASE_URL", "https://gateway.example.com/v1");
+      if (serverApiKey) {
+        setEnv("DEFAULT_PROVIDER_API_KEY", serverApiKey);
+      }
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+        Response.json(await getByokPublicKey()),
+      );
+      const apiKeySecret = await encryptSecret(
+        "browser-secret",
+        "provider:OpenAI",
+      );
+      const provider = ProviderRuntimeConfigSchema.parse({
+        type: "OpenAI",
+        source: "server-default",
+        apiKeySecret,
+      });
+
+      await expect(resolveProviderRuntimeConfig(provider)).resolves.toEqual({
+        type: "OpenAI",
+        name: "Current default",
+        baseUrl: "https://gateway.example.com/v1",
+        apiKey: "browser-secret",
+      });
+    },
+  );
 
   it("builds provider BYOK envelopes from encrypted local secrets", async () => {
     vi.resetModules();

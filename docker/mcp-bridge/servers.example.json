@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "servers": [
+    {
+      "id": "filesystem",
+      "label": "Local filesystem",
+      "command": "/usr/local/bin/node",
+      "args": ["/servers/filesystem-server.mjs"],
+      "cwd": "/workspace",
+      "envAllowlist": [],
+      "timeoutMs": 30000,
+      "maxOutputBytes": 1048576,
+      "maxSessions": 16
+    }
+  ]
+}

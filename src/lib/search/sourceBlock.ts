@@ -28,12 +28,12 @@ export function getSourceBlockPresentation({
   let label = "Sources";
   if (isSearching) {
     label = "Searching...";
-  } else if (error) {
-    label = "Search failed";
   } else if (hasSources && hasImages) {
     label = "Sources & Images";
   } else if (hasImages) {
     label = "Images";
+  } else if (error && !hasSources) {
+    label = "Search failed";
   }
 
   return {

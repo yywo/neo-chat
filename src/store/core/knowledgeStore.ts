@@ -8,6 +8,7 @@ import {
   KnowledgeFileStorageStatus,
   KnowledgeFileStatus,
   RAGConfig,
+  KnowledgeChunkingConfig,
 } from "@/types";
 import { useSettingsStore } from "./settingsStore";
 import { parseDocumentFile } from "@/services/api/docParseService";
@@ -21,6 +22,8 @@ import {
   normalizeKnowledgeCollection,
   normalizeKnowledgeCollections,
   normalizeKnowledgeFile,
+  normalizeKnowledgeChunking,
+  createKnowledgeChunkingRevision,
 } from "@/lib/knowledge/entities";
 import { KNOWLEDGE_LIMITS } from "@/config/limits";
 import {
@@ -29,6 +32,7 @@ import {
   resolveOPFSBlob,
   resolveOPFSUrl,
   saveToOPFS,
+  writeBlobToOPFS,
   writeToOPFS,
 } from "@/utils/opfs";
 import {
@@ -59,8 +63,14 @@ interface KnowledgeState {
     description: string,
     icon: string,
     color: string,
+    chunking?: KnowledgeChunkingConfig,
   ) => void;
   updateCollection: (id: string, updates: Partial<Collection>) => void; // New Action
+  updateCollectionChunking: (
+    id: string,
+    chunking: KnowledgeChunkingConfig,
+  ) => void;
+  reindexCollection: (collectionId: string) => Promise<void>;
   deleteCollection: (id: string) => Promise<void>;
   uploadFiles: (collectionId: string, files: File[]) => Promise<void>;
   updateFileContent: (
@@ -272,12 +282,58 @@ async function cleanupKnowledgeFileResources(
 ) {
   if (!file) return;
   const errors: unknown[] = [];
-
   const opfsUrls = new Set(
     [file.sourcePath, file.contentPath, file.path].filter(
       (url): url is string => Boolean(url),
     ),
   );
+  const stagedFiles: Array<{ originalUrl: string; stagedUrl: string }> = [];
+
+  const cleanupStagedFiles = async () => {
+    await Promise.allSettled(
+      stagedFiles.map(({ stagedUrl }) => deleteFromOPFS(stagedUrl)),
+    );
+  };
+
+  if (options.strict) {
+    try {
+      let index = 0;
+      for (const originalUrl of opfsUrls) {
+        const content = await resolveOPFSBlob(originalUrl);
+        if (!content) continue;
+        const stagedUrl = `opfs://knowledge-base/.trash/${uuidv7()}/${index}`;
+        await writeBlobToOPFS(stagedUrl, content);
+        stagedFiles.push({ originalUrl, stagedUrl });
+        index += 1;
+      }
+    } catch (error) {
+      await cleanupStagedFiles();
+      logDevWarn("Failed to stage OPFS knowledge files:", error);
+      throw new Error("Failed to stage knowledge file resources.");
+    }
+  }
+
+  if (file.ragId) {
+    try {
+      const chunkCount = file.ragChunkCount || 1_000;
+      const ids = buildKnowledgeVectorIds(file.ragId, chunkCount);
+      const deleted = await deleteFromRAG(ids, collectionId);
+      if (!deleted) {
+        throw new Error("Failed to delete RAG vectors.");
+      }
+    } catch (error) {
+      logDevWarn("Failed to delete RAG vectors:", error);
+      errors.push(error);
+    }
+  }
+
+  // A strict deletion keeps the local source recoverable until remote vector
+  // cleanup has succeeded. The user can safely retry without a ghost file.
+  if (options.strict && errors.length > 0) {
+    await cleanupStagedFiles();
+    throw new Error("Failed to clean up knowledge file resources.");
+  }
+
   for (const url of opfsUrls) {
     try {
       await deleteFromOPFS(url);
@@ -287,20 +343,23 @@ async function cleanupKnowledgeFileResources(
     }
   }
 
-  if (file.ragId) {
-    try {
-      const chunkCount = file.ragChunkCount || 1_000;
-      const ids = buildKnowledgeVectorIds(file.ragId, chunkCount);
-      await deleteFromRAG(ids, collectionId);
-    } catch (error) {
-      logDevWarn("Failed to delete RAG vectors:", error);
-      errors.push(error);
-    }
-  }
-
   if (options.strict && errors.length > 0) {
+    let rollbackFailed = false;
+    for (const { originalUrl, stagedUrl } of stagedFiles) {
+      try {
+        const content = await resolveOPFSBlob(stagedUrl);
+        if (!content) throw new Error("Staged OPFS file is unavailable.");
+        await writeBlobToOPFS(originalUrl, content);
+      } catch (error) {
+        rollbackFailed = true;
+        logDevWarn("Failed to restore staged OPFS knowledge file:", error);
+      }
+    }
+    if (!rollbackFailed) await cleanupStagedFiles();
     throw new Error("Failed to clean up knowledge file resources.");
   }
+
+  await cleanupStagedFiles();
 }
 
 async function cleanupKnowledgeFiles(
@@ -328,12 +387,11 @@ async function reindexKnowledgeFile(
   collectionId: string,
   fileId: string,
 ) {
-  const file = get()
-    .collections.find((collection) => collection.id === collectionId)
-    ?.files.find((item) => item.id === fileId);
+  const collection = get().collections.find((item) => item.id === collectionId);
+  const file = collection?.files.find((item) => item.id === fileId);
 
   const contentPath = file ? getContentPath(file) : undefined;
-  if (!file || !contentPath) {
+  if (!collection || !file || !contentPath) {
     throw new Error("No local file content is available to re-index.");
   }
 
@@ -382,7 +440,8 @@ async function reindexKnowledgeFile(
       fileName: file.name,
       ragFileId,
       textContent: content,
-      chunkSize: rag.chunkSize || 512,
+      chunking: collection.chunking,
+      chunkingRevision: collection.chunkingRevision,
     });
     if (vectorItems.length === 0) {
       throw new Error("No text content available to index.");
@@ -437,6 +496,7 @@ async function reindexKnowledgeFile(
                     indexError: undefined,
                     ragId: ragFileId,
                     ragChunkCount: vectorItems.length,
+                    indexedChunkingRevision: collection.chunkingRevision,
                   }),
                 }) || item
               : item,
@@ -481,7 +541,17 @@ export const useKnowledgeStore = create<KnowledgeState>()(
       },
       collections: [],
 
-      createCollection: (name, description, icon, color) => {
+      createCollection: (name, description, icon, color, requestedChunking) => {
+        const defaultChunkSize =
+          useSettingsStore.getState().rag.chunkSize || 512;
+        const chunking = normalizeKnowledgeChunking(
+          requestedChunking || {
+            strategy: "auto",
+            chunkSize: defaultChunkSize,
+            overlapPercent: 10,
+          },
+          defaultChunkSize,
+        );
         const newCollection = normalizeKnowledgeCollection({
           id: uuidv7(),
           name,
@@ -489,6 +559,8 @@ export const useKnowledgeStore = create<KnowledgeState>()(
           icon,
           color,
           files: [],
+          chunking,
+          chunkingRevision: createKnowledgeChunkingRevision(chunking),
           updatedAt: Date.now(),
         });
         if (!newCollection) return;
@@ -516,6 +588,58 @@ export const useKnowledgeStore = create<KnowledgeState>()(
             );
           }),
         }));
+      },
+
+      updateCollectionChunking: (id, nextChunking) => {
+        set((state) => ({
+          collections: state.collections.map((collection) => {
+            if (collection.id !== id) return collection;
+            const chunking = normalizeKnowledgeChunking(
+              nextChunking,
+              collection.chunking.chunkSize,
+            );
+            const chunkingRevision = createKnowledgeChunkingRevision(chunking);
+            if (chunkingRevision === collection.chunkingRevision) {
+              return collection;
+            }
+            return {
+              ...collection,
+              chunking,
+              chunkingRevision,
+              files: collection.files.map((file) => ({
+                ...file,
+                ...buildStatusUpdate(file, {
+                  indexStatus: "not_indexed",
+                  indexError: undefined,
+                }),
+              })),
+              updatedAt: Date.now(),
+            };
+          }),
+        }));
+      },
+
+      reindexCollection: async (collectionId) => {
+        const collection = get().collections.find(
+          (item) => item.id === collectionId,
+        );
+        if (!collection) return;
+        const failures: unknown[] = [];
+        for (const file of collection.files) {
+          if (!getContentPath(file)) continue;
+          try {
+            await runKnowledgeFileOperation(collectionId, file.id, () =>
+              reindexKnowledgeFile(set, get, collectionId, file.id),
+            );
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+        if (failures.length > 0) {
+          throw new Error(
+            `Failed to re-index ${failures.length} knowledge file(s).`,
+          );
+        }
       },
 
       deleteCollection: async (id) => {
@@ -718,7 +842,8 @@ export const useKnowledgeStore = create<KnowledgeState>()(
                   fileName: file.name,
                   ragFileId: kFile.id,
                   textContent,
-                  chunkSize: rag.chunkSize || 512,
+                  chunking: collection.chunking,
+                  chunkingRevision: collection.chunkingRevision,
                 });
                 if (vectorItems.length === 0) {
                   throw new Error("No text content available to index.");
@@ -742,6 +867,7 @@ export const useKnowledgeStore = create<KnowledgeState>()(
                   indexError: undefined,
                   ragId: kFile.id,
                   ragChunkCount: vectorItems.length,
+                  indexedChunkingRevision: collection.chunkingRevision,
                 });
               } catch (error) {
                 if (isFileStillPresent(kFile.id)) {
@@ -937,7 +1063,8 @@ export const useKnowledgeStore = create<KnowledgeState>()(
                 fileName,
                 ragFileId: fileId,
                 textContent: content,
-                chunkSize: rag.chunkSize || 512,
+                chunking: collection.chunking,
+                chunkingRevision: collection.chunkingRevision,
               });
               if (vectorItems.length === 0) {
                 throw new Error("No text content available to index.");
@@ -970,6 +1097,9 @@ export const useKnowledgeStore = create<KnowledgeState>()(
               status: ragId ? "indexed" : "saved",
               ragId,
               ragChunkCount,
+              indexedChunkingRevision: ragId
+                ? collection.chunkingRevision
+                : undefined,
               error: undefined,
             });
           } catch (e) {
@@ -1392,9 +1522,14 @@ export const useKnowledgeStore = create<KnowledgeState>()(
       version: STORAGE_VERSION,
       migrate: (persistedState) => {
         const state = persistedState as Partial<KnowledgeState>;
+        const defaultChunkSize =
+          useSettingsStore.getState().rag.chunkSize || 512;
         return {
           ...state,
-          collections: normalizeKnowledgeCollections(state.collections || []),
+          collections: normalizeKnowledgeCollections(
+            state.collections || [],
+            defaultChunkSize,
+          ),
         } as KnowledgeState;
       },
       onRehydrateStorage: () => {

@@ -42,6 +42,7 @@ export const DEFAULT_MODEL_PARAMS = {
 export const DEFAULT_CHAT_CONFIG = {
   useSearch: false,
   useReasoning: false,
+  useAgentMode: false,
   reasoningMode: "off",
   useRAG: false,
   temperature: 0.7,
@@ -62,11 +63,15 @@ export const DEFAULT_SYSTEM_PROMPT = `You are a helpful AI assistant. You suppor
 export const DEFAULT_SYSTEM_SETTINGS = {
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   personality: "default",
+  enableAutoScroll: false,
   enableAutoTitle: true,
   enableRelatedQuestions: true,
   enableAutoCompression: true,
   compressionThreshold: 12, // 12 轮对话
   historyKeepCount: 4, // 保留最近 4 轮
+  enableAutoImageCompression: true,
+  imageCompressionMaxSizeMB: 1,
+  imageCompressionMaxWidthOrHeight: 1024,
   enableCodeCollapse: false,
   enableHtmlVisualPrompt: true,
   enableDestructiveToolConfirmation: true,

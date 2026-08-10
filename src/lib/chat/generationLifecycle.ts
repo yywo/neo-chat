@@ -47,3 +47,26 @@ export function createActiveGenerationSyncSnapshot({
     messages: [...activeMessages],
   };
 }
+
+export function createInterruptedGenerationUpdate(
+  message: Message,
+  checkpointAt = Date.now(),
+): Partial<Message> {
+  const outputBlocks = message.outputBlocks?.map((block) =>
+    block.type === "search" && block.isSearching
+      ? { ...block, isSearching: false }
+      : block,
+  );
+
+  return {
+    isSearching: false,
+    generation: message.generation
+      ? {
+          ...message.generation,
+          status: "interrupted",
+          checkpointAt,
+        }
+      : undefined,
+    ...(outputBlocks ? { outputBlocks } : {}),
+  };
+}

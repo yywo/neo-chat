@@ -17,27 +17,38 @@
   <a href="https://github.com/u14app/neo-chat/actions/workflows/docker.yml"><img alt="Docker" src="https://github.com/u14app/neo-chat/actions/workflows/docker.yml/badge.svg" /></a>
   <img alt="Next.js" src="https://img.shields.io/badge/Next.js-16-black" />
   <img alt="React" src="https://img.shields.io/badge/React-19-149eca" />
-  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178c6" />
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-6-3178c6" />
 </p>
 
-Neo Chat 是一个可自托管、本地优先的 AI 对话应用，基于 Next.js、React、TypeScript 和 Zustand 构建。它把多供应商模型、助理预设、纯文本技能、OpenAPI 风格插件工具、远程 streamable HTTP MCP 服务器、联网与本地全局搜索、知识库 RAG、版本化备份恢复、本地记忆、语音、生成媒体、富消息渲染、引用和可编辑产物整合到一个干净的工作台中。
+Neo Chat 是一个可自托管、本地优先的 AI 对话应用，基于 Next.js、React、TypeScript 和 Zustand 构建。它把多供应商模型、助理预设、纯文本技能、OpenAPI 风格插件工具、远程 MCP 与可选本地 stdio 桥接、联网与本地全局搜索、知识库 RAG、显式启用的加密跨设备同步、版本化备份恢复、本地记忆、离线 PWA、语音、生成媒体、富消息渲染、引用和可编辑产物整合到一个干净的工作台中。
 
 它适合想使用现代 AI 工作台、同时保持本地数据所有权的用户。默认情况下，对话历史、工作区元数据、技能、插件配置、记忆、搜索索引和文件都保存在浏览器内；服务端路由作为受控代理，连接模型供应商、联网搜索、RAG、文档解析、语音、插件与 MCP 执行和部署健康检查。
 
-## v2.3.0 亮点
+## v2.4.0 亮点
 
-- 新增本地全局搜索中心，可搜索活跃对话分支、附件、工作区、知识库和记忆，
-  支持筛选、增量索引、结果直达，以及 `Ctrl`/`Cmd` + `K` 快捷键。
-- 新增版本 3 ZIP 备份与事务式恢复，覆盖本地应用数据和已引用 OPFS 文件，
-  提供完整性校验、回滚恢复、旧版 v2 JSON 兼容，并明确排除凭据。
-- 完善知识库恢复流程：保留原文件与可编辑提取内容，分离存储/索引状态，
-  支持重试、重解析、重建索引、取消、对账和按文件并发保护。
-- 新增可选的破坏性工具授权，支持仅允许一次或拒绝，并加入风险下限、参数
-  脱敏、稳定函数指纹、非破坏性会话授权和插件/MCP 服务端 fail-closed 校验。
-- 显式展示市场与部署失败状态，统一有效搜索能力，保持 Firecrawl 无密钥可用，
-  并允许受信任的自托管用户配置 HTTP/私网 endpoint。
-- 修复 OpenAI Responses 多轮历史、跨域图片显示/导出、模型消息下载进度、搜索
-  设置持久化和恢复/清理写入竞态，并新增导入规范检查与隔离的 Playwright E2E。
+- 新增显式启用的端到端加密个人保险库，通过 WebDAV 或 S3/MinIO 在多设备间
+  收敛同步；恢复密钥、凭据、本地基线、搜索缓存和向量不会进入远端或 ZIP。
+- 新增长对话虚拟列表、流式 checkpoint、首字前有限重试、部分输出续写、消息
+  引用回复，以及重新生成兄弟分支时的显式模型选择。
+- 新增会话级输入草稿、Token 与上下文用量摘要、生成期间的消息树变更保护，
+  并明确离线状态下的交互边界。
+- 新增面向支持工具调用模型的会话级 Agent 模式，由浏览器编排五个本地化、
+  只读且自动授权的内置工具。
+- 技能升级为参数化 schema，并支持最多四个普通技能组成的有序 bundle；参数在
+  发送前校验，调用记录可复现。
+- 新增集合级分块策略、Markdown 标题感知预览、显式重建索引、关键词与向量混合
+  检索、关键词降级、稳定来源预览、文件筛选和串行批处理。
+- 新增可配置的客户端图片压缩，覆盖会话、工作区、生成及插件图片，并支持取消
+  和安全回退原图。
+- 远程 MCP 新增 legacy SSE 兼容、仅限连接阶段的安全降级和加密的安装时凭据，
+  同时提供命令由部署配置固定的鉴权 Docker stdio 桥接。
+- 新增严格不缓存 API 的本地部署离线 PWA、可访问的全局搜索模态框、本地化设置
+  搜索、首次模型配置引导，以及只读的本地存储健康诊断。
+- 自定义模型 metadata 和本地加密的 server-default 凭据改为按供应商隔离；无效、
+  缺失或不匹配的默认配置会 fail closed。
+- 本地存储 schema 升至 6，同时继续兼容版本 3 ZIP，并补齐中英日界面文案。
+
+完整发布说明见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## v2.2.0 亮点
 
@@ -64,23 +75,45 @@ Neo Chat 是一个可自托管、本地优先的 AI 对话应用，基于 Next.j
 
 ## 功能特性
 
-- 支持 Google、Anthropic、OpenAI 和 OpenAI-compatible endpoint 的多供应商对话。
+- 支持 Google、Anthropic、OpenAI 和 OpenAI-compatible endpoint 的多供应商
+  对话，并按供应商隔离自定义模型能力 metadata。
 - 对 metadata 声明支持图片输出/输入的模型提供原生图片生成和图片编辑，图文混排会按模型输出顺序渲染，并使用 OPFS + Blob URL 做图片显示缓存。
-- 本地优先的会话、分支、置顶对话、工作区、工作区文件和助理指令。
+- 对受支持的上传和生成图片提供可配置的客户端压缩，在写入存储或发送模型前
+  处理，并为超长图片和失败场景安全保留原图。
+- 本地优先的会话、分支、置顶对话、会话级输入草稿、回复导航、Token/上下文
+  用量摘要、工作区、工作区文件和助理指令。
+- 显式启用的 WebDAV 或 S3/MinIO 端到端加密同步，包含设备身份、恢复代码、
+  可收敛 CRDT 文档和加密 OPFS 分块。
 - 支持 LobeHub Agent Registry 助理预设，也支持本地自定义助理。
-- 支持纯文本技能：本地化公共目录、安装/卸载、编辑内置技能、本地自定义技能、自动选择和工作区预设。
-- 支持 OpenAPI 风格插件工具和 remote streamable HTTP MCP 服务器，两者共用已安装/启用插件控制、插件鉴权、服务端执行、传输层风险下限和可选的破坏性调用确认。
+- 支持面向工具调用模型的会话级 Agent 模式，由浏览器编排网页搜索、知识库搜索、
+  纯文本技能加载、沙箱 JavaScript 和任务计划更新。
+- 支持参数化文本技能：本地化公共目录、安装/卸载、编辑内置技能、本地自定义
+  技能、自动选择、工作区预设，以及最多四个普通技能组成的有序非嵌套 bundle。
+- 支持 OpenAPI 风格插件工具，以及 remote Streamable HTTP 与 legacy SSE MCP
+  服务器，包含加密的安装时凭据、实际 transport 持久化、插件鉴权、服务端执行、
+  风险下限和可选的破坏性调用确认；本地 Docker 部署还可通过独立鉴权桥接使用
+  allowlist 中的 stdio 服务器。
 - 内置网页阅读、天气、Unsplash 搜索、Agnes/Google 图片处理、OpenAI 兼容图片处理、OpenAI Responses 图片处理、Agnes 视频生成工具。Agnes 图片处理支持图生图编辑，Agnes 视频生成支持公开图片 URL 生成视频和插件级模型 ID。图片处理插件和模型原生图片输出保持分离。
 - 支持 Google 原生 Google Search、OpenAI Web Search，以及 Tavily、Firecrawl、Exa、Bocha、SearXNG 等外部搜索。
-- 支持本地全局搜索活跃对话分支、附件、工作区、知识库和记忆，并提供来源/日期/角色筛选和结果直达。
-- 知识库 RAG 支持保留原文件、编辑提取内容、Mineru/LlamaParse 文档解析、可选向量索引，以及解析或索引失败后的恢复操作。
-- 支持本地元数据和已引用 OPFS 文件的版本化 ZIP 备份与事务式恢复，不包含凭据和外部服务数据。
+- 在可访问的模态框中本地全局搜索活跃对话分支、附件、工作区、知识库和记忆，
+  提供来源/日期/角色筛选和结果直达；设置页也提供独立的本地化搜索。
+- 知识库 RAG 支持保留原文件、编辑提取内容、可配置的 Markdown 感知分块、
+  关键词/向量混合检索、Mineru/LlamaParse 文档解析、文件名/状态筛选、串行批量
+  操作，以及解析或索引失败后的恢复控制。
+- 支持本地元数据和已引用 OPFS 文件的版本化 ZIP 备份与事务式恢复，不包含凭据
+  和外部服务数据，并提供只读的配额与 OPFS 引用健康诊断。
+- 本地部署可安装离线 PWA，离线时以只读方式保留历史记录、本地搜索、知识库访问和备份导出；托管部署会主动注销。
 - 支持本地记忆、可选记忆搜索、后台记忆提取和记忆整合。
 - 支持浏览器语音 API、ElevenLabs、Mimo 或兼容配置的语音输入输出。
 - 支持 Markdown、安全内联 HTML 视觉块、GFM 表格、数学公式、代码高亮、Mermaid 图、思维导图、引用、推理、工具调用、图片、音频和产物渲染。
-- 用户输入的模型、插件、搜索、RAG、语音密钥会以本地 BYOK envelope 加密。
+- 用户输入的模型、插件、MCP、搜索、RAG、语音密钥会以本地 BYOK envelope
+  加密，server-default 供应商配置会 fail closed 校验。
 - 支持部署健康检查，覆盖 BYOK、访问密码、共享存储、默认模型、搜索、RAG 和语音配置状态。
 - 支持 Docker 和 Cloudflare Workers 部署。
+
+部署方式与安全边界详见 [端到端加密同步](docs/encrypted-sync.md)、
+[MCP stdio 桥接](docs/mcp-stdio-bridge.md) 与
+[离线 PWA](docs/offline-pwa.md)。
 
 ## 截图
 
@@ -231,8 +264,11 @@ Variables and Secrets** 中配置。运行时变量不会自动出现在构建�
 
 Neo Chat 默认本地优先：
 
-- 核心设置、供应商记录、已选模型和供应商 API key 存在浏览器 `localStorage`。
-- 对话元数据、消息、应用设置、已安装插件、已安装/自定义技能、技能目录缓存、助理、知识库元数据和本地记忆通过 `localforage` 存在 IndexedDB。
+- 核心设置、供应商记录、已选模型、会话级输入草稿和本地加密的供应商凭据
+  envelope 存在浏览器 `localStorage`。
+- 对话元数据、消息、应用设置、已安装插件、已安装/自定义技能、技能目录缓存、
+  助理、知识库元数据、本地记忆、加密同步配置和 CRDT 基线通过 `localforage`
+  存在 IndexedDB。
 - 上传的对话与工作区文件、知识库原文件与提取文本，以及图片显示缓存保存在浏览器 OPFS。运行期 `blob:` URL 不会持久化；版本 3 ZIP 备份会打包已引用的应用自有 OPFS 文件，但不包含凭据和远程服务数据。
 - 用户输入的密钥会先在浏览器中加密成 BYOK envelope，再发送给 API 路由。
 
@@ -268,6 +304,12 @@ DEFAULT_PROVIDER_BASE_URL=""
 DEFAULT_PROVIDER_API_KEY="provider-key"
 DEFAULT_PROVIDER_MODELS="model-a,model-b"
 ```
+
+只有部署提供相关 `DEFAULT_PROVIDER_*` 或 `DEFAULT_MODEL_*` 配置时，应用才会暴露
+server-default 供应商。部署 API key 可以留空，让每个浏览器保存自己的本地加密
+凭据；该凭据只会在供应商类型与当前服务端默认配置一致时复用。服务端默认配置
+缺失或类型不匹配时会 fail closed。自定义 Base URL 会在保存前校验，同时继续支持
+受信任的自托管 HTTP/私网目标。
 
 `DEFAULT_PROVIDER_MODELS` 支持多种格式:
 
@@ -350,17 +392,19 @@ NEXT_PUBLIC_SITE_URL="https://your-domain.com"
 
 ```mermaid
 flowchart LR
-  Browser["浏览器应用\nReact + Zustand"] --> LocalStorage["localStorage\n供应商 + 设置"]
-  Browser --> IndexedDB["IndexedDB\n会话 + 插件 + 技能 + 知识库 + 记忆"]
-  Browser --> OPFS["OPFS\n上传 + 工作区文件"]
+  Browser["浏览器应用\nReact + Zustand"] --> LocalStorage["localStorage\n供应商 + 加密密钥 + 草稿"]
+  Browser --> IndexedDB["IndexedDB\n会话 + 插件 + 技能 + 知识库 + 记忆 + 同步"]
+  Browser --> OPFS["OPFS\n上传 + 原文件 + 图片缓存"]
   Browser --> ApiRoutes["Next.js API routes"]
   ApiRoutes --> Providers["模型供应商\nGoogle / Anthropic / OpenAI / compatible"]
   ApiRoutes --> Search["搜索供应商"]
   ApiRoutes --> Rag["RAG + 文档服务"]
-  ApiRoutes --> Plugins["插件 API"]
+  ApiRoutes --> Plugins["插件 + MCP endpoint"]
+  ApiRoutes --> Sync["WebDAV / S3"]
   ApiRoutes --> Voice["语音供应商"]
   ApiRoutes --> Health["部署健康"]
   Browser -. "加密 BYOK envelopes" .-> ApiRoutes
+  Browser -. "加密同步对象" .-> ApiRoutes
 ```
 
 应用尽量把持久用户数据保存在浏览器存储中。API 路由负责：
@@ -368,7 +412,8 @@ flowchart LR
 - 统一供应商请求和流式输出；
 - 在服务端解密 BYOK；
 - 为代理上游提供 URL 安全门；
-- 通过已注册插件 ID 和函数名执行插件；
+- 通过已注册插件 ID 和函数名执行插件与 MCP；
+- 代理已加密的 WebDAV/S3 同步对象，不在服务端持久化密钥；
 - 通过 `/api/health` 输出部署健康状态；
 - 在 hosted 模式检查共享存储和固定服务的网络边界。
 
@@ -376,11 +421,44 @@ flowchart LR
 
 技能是纯文本的提示词上下文模块。应用会从 `public/data/skills` 加载本地化元数据目录，只在需要时获取完整技能定义，并把已安装、已编辑和自定义技能保存在本地。活跃技能可以手动选择，也可以来自工作区预设，或在发送消息时自动选择。
 
-插件是可执行工具，可以来自 OpenAPI manifest、内置定义，或从官方 MCP Registry 发现的 remote streamable HTTP MCP 服务器。启用的插件函数会以 tool 形式暴露给兼容模型，再由服务端插件路由执行。MCP v1 只支持远程 streamable HTTP：stdio、npm、Docker、本地进程 transport 和 OAuth 登录流暂不支持。用户配置的 MCP server URL 可使用 HTTP 或 HTTPS，并可在任一部署模式下指向 localhost 或私网；官方 Registry 本身仍保持 HTTPS-only。内置图片处理插件结果保留在工具详情和压缩后的对话历史中，由模型决定是否以及如何在后续回复中引用生成或编辑后的图片。OpenAI 兼容 Images API 和 OpenAI Responses 图片处理是两个独立插件，便于分别管理密钥和启用状态。受支持的内置媒体插件提供插件级 API Base URL 与 Model ID 字段、可选图片数量参数、Agnes 图生图编辑，以及基于公开 HTTPS 图片 URL 的 Agnes 图生视频；Agnes 视频仍保持显式 `create_video` / `get_video_result` 两步流程。工具调用编排使用较高但有边界的循环上限，既允许多步任务，也避免递归工具调用失控。
+Agent 模式是按会话显式启用、面向支持工具调用模型的客户端编排模式。它提供
+`web_search`、`search_knowledge`、`load_skill`、`run_javascript` 和
+`update_task_plan` 五个只读、自动授权的内置工具。JavaScript 只能在有边界的
+浏览器沙箱内同步运行，不能访问网络或 DOM；加载的技能仍是纯文本。Agent
+网页搜索要求使用外部搜索供应商，不能把 Google 原生搜索或 OpenAI Web Search
+与 Agent 函数调用组合使用。
 
-搜索可以使用 Google 模型的原生 Google Search、OpenAI Web Search，也可以对包括 Anthropic 在内的其他模型族使用外部搜索供应商。Firecrawl 公共服务无需 API key 即可使用，配置 key 只会提高请求速率。独立的本地全局搜索中心会在浏览器内存中索引活跃对话分支、附件、工作区、知识库和记忆，并排除推理、工具 payload 和凭据。
+插件是可执行工具，可以来自 OpenAPI manifest、内置定义，或从官方 MCP Registry
+发现的远程 MCP 服务器。启用的函数会以 tool 形式暴露给兼容模型，再由服务端插件
+路由执行。远程 MCP 支持 Streamable HTTP 和 legacy SSE：优先尝试 Streamable HTTP，
+仅当连接建立阶段返回 404 或 405 时才降级到 SSE；鉴权及其他错误不会跨 transport
+重试。协商出的实际 transport 会保存并用于后续工具调用。需要 header 凭据的
+Registry 条目会在发现工具前提示输入，并以本地加密密钥保存。本地 Docker 用户可
+通过独立鉴权的 [MCP stdio 桥接](docs/mcp-stdio-bridge.md) 暴露预配置 stdio
+服务器。用户配置的 MCP URL 可使用 HTTP 或 HTTPS，并可在任一部署模式下指向
+localhost 或私网；官方 Registry 本身仍保持 HTTPS-only。
 
-知识库 RAG 会分别保留上传原文件和可编辑、可索引的提取文本，可选使用 Mineru 或 LlamaParse 解析文档，并可把 chunks 索引到外部向量服务。失败文件可以重试、重新解析、重建索引、取消或对账，不会丢弃仍可使用的原文件。
+内置图片处理插件结果保留在工具详情和压缩后的对话历史中，由模型决定是否以及
+如何在后续回复中引用生成或编辑后的图片。OpenAI 兼容 Images API 和 OpenAI
+Responses 图片处理是两个独立插件，便于分别管理密钥和启用状态。受支持的内置
+媒体插件提供插件级 API Base URL 与 Model ID 字段、可选图片数量参数、Agnes
+图生图编辑，以及基于公开 HTTPS 图片 URL 的 Agnes 图生视频；Agnes 视频仍保持
+显式 `create_video` / `get_video_result` 两步流程。工具调用编排使用较高但有边界
+的循环上限，既允许多步任务，也避免递归工具调用失控。
+
+搜索可以使用 Google 模型的原生 Google Search、OpenAI Web Search，也可以对
+包括 Anthropic 在内的其他模型族使用外部搜索供应商。Agent 模式启用时，需要
+选择外部供应商才能暴露 `web_search`；原生搜索不会与 Agent 函数调用组合。
+Firecrawl 公共服务无需 API key 即可使用，会遵循所选时间范围，配置 key 只会
+提高请求速率。独立的全局搜索模态框会在浏览器内存中索引活跃对话分支、附件、
+工作区、知识库和记忆，并排除推理、工具 payload 和凭据。设置页还提供独立、
+可通过键盘导航的本地化搜索。
+
+知识库 RAG 会分别保留上传原文件和可编辑、可索引的提取文本，支持 Markdown
+感知或递归分块及关键词/向量混合检索，可选使用 Mineru 或 LlamaParse 解析文档，
+并可把 chunks 索引到外部向量服务。文件可按名称或状态筛选，也可串行批量重试、
+重建索引、下载或确认删除，并逐文件报告结果。失败操作仍可重新解析、取消或对账，
+不会丢弃仍可使用的原文件。
 
 语音流程支持浏览器语音 API 和外部供应商。将 `DEFAULT_VOICE_PROVIDER` 设为 `elevenlabs` 或 `mimo` 可启用服务端默认语音供应商；留空则默认使用浏览器原生语音。默认模型值为空会禁用对应的 STT 或 TTS 能力，用户级密钥也可以由 UI 本地保存。
 
@@ -392,7 +470,11 @@ Neo Chat 适合自托管，但不是开箱即用的公共 SaaS 安全边界。
 
 - 用户配置的 Provider、搜索、RAG、插件和 MCP 目标在任一部署模式下都可使用 HTTP 和私网地址。
 - 固定 Registry 与内置服务继续使用 HTTPS 和域名白名单；媒体代理的 HTTP 开关仍由 `ALLOW_LOCAL_NETWORK_PROXY` 控制。
+- 同步对象在浏览器内加密，并使用不透明的远端对象名；恢复材料、凭据、本地基线
+  和设备身份不会进入远端对象或 ZIP 导出。
 - BYOK envelope 防止用户输入的明文密钥出现在请求体中。
+- server-default 供应商凭据会在本地加密并绑定供应商类型；部署默认配置不可用
+  或类型发生变化时，请求会被拒绝。
 - API schema 会拒绝未知高风险字段和过大的 payload。
 - 插件执行仍然通过服务端代理和校验。工具调用默认自动执行；可在系统设置中选择仅让破坏性调用暂停，等待单次允许或拒绝。破坏性授权不会在本会话持久化。
 - `ACCESS_PASSWORD` 是部署门禁，不是账号系统。

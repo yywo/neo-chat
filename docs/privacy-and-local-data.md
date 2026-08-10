@@ -24,7 +24,7 @@ message exports render the visible output blocks, while full app export
 preserves every stored session message tree, including trees not referenced by
 the current chat metadata. If any message tree cannot be read, the export fails
 instead of returning partial data. The current full-app backup is export version
-3 and records storage schema version 5. It creates a ZIP with `manifest.json`,
+3 and records storage schema version 6. It creates a ZIP with `manifest.json`,
 `data.json`, and every referenced app-owned OPFS blob that can be read. The
 manifest records file size, MIME type, and SHA-256; missing files are listed
 explicitly. Runtime `blob:` URLs, remote caches, external RAG vectors, plaintext
@@ -126,7 +126,8 @@ Depending on configuration, user content may be sent to:
 - Voice providers such as ElevenLabs or Mimo.
 - Plugin APIs enabled by the user.
 - Remote MCP servers installed from the Registry or configured through a custom
-  HTTPS endpoint.
+  endpoint, and local stdio MCP servers explicitly enabled through the Docker
+  bridge.
 
 Text-only skills themselves are local prompt instructions, but applied skill
 content can be sent to the selected model provider as part of the prompt.

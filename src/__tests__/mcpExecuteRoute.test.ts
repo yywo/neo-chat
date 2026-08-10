@@ -111,6 +111,7 @@ describe("MCP plugin execute route", () => {
     expect(executeMcpToolRequestMock).toHaveBeenCalledWith(
       expect.objectContaining({
         serverUrl: "https://mcp.example.com/mcp",
+        transport: "streamable-http",
         toolName: "resolve-library-id",
         args: { libraryName: "react" },
         signal: request.signal,

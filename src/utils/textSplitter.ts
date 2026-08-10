@@ -139,3 +139,48 @@ export class SimpleRecursiveSplitter {
     return finalChunks;
   }
 }
+
+export interface MarkdownChunk {
+  text: string;
+  headingPath: string[];
+}
+
+export function splitMarkdownWithHeadings({
+  text,
+  chunkSize,
+  chunkOverlap,
+}: {
+  text: string;
+  chunkSize: number;
+  chunkOverlap: number;
+}): MarkdownChunk[] {
+  const splitter = new SimpleRecursiveSplitter({ chunkSize, chunkOverlap });
+  const headingPath: string[] = [];
+  const sections: Array<{ headingPath: string[]; content: string[] }> = [];
+  let current = { headingPath: [] as string[], content: [] as string[] };
+
+  const flush = () => {
+    if (current.content.some((line) => line.trim())) sections.push(current);
+  };
+
+  for (const line of text.split(/\r?\n/)) {
+    const heading = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+    if (!heading) {
+      current.content.push(line);
+      continue;
+    }
+    flush();
+    const level = heading[1].length;
+    headingPath.splice(level - 1);
+    headingPath[level - 1] = heading[2].trim();
+    current = { headingPath: [...headingPath], content: [line] };
+  }
+  flush();
+
+  return sections.flatMap((section) =>
+    splitter
+      .splitText(section.content.join("\n").trim())
+      .filter(Boolean)
+      .map((chunk) => ({ text: chunk, headingPath: section.headingPath })),
+  );
+}

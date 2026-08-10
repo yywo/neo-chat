@@ -1,5 +1,8 @@
 import type { Message, Session, SessionMessageTree } from "@/types";
-import { normalizeMessages } from "@/store/storage/migrations";
+import {
+  normalizeMessages,
+  normalizeMessageTreeMessages,
+} from "@/store/storage/migrations";
 import {
   getActiveMessagePath,
   isSessionMessageTree,
@@ -27,10 +30,13 @@ export async function createSessionExportPayload({
   ) => Promise<Message[] | SessionMessageTree | null | undefined>;
 }): Promise<SessionExportPayload> {
   if (session.id === currentSessionId && activeMessageTree) {
+    const messageTree = normalizeMessageTreeMessages(
+      normalizeSessionMessageTree(activeMessageTree),
+    );
     return {
       ...session,
       messages: normalizeMessages(activeMessages),
-      messageTree: activeMessageTree,
+      messageTree,
     };
   }
 
@@ -39,7 +45,7 @@ export async function createSessionExportPayload({
       ? activeMessages
       : await loadMessages(session.id);
   const messageTree = isSessionMessageTree(storedMessages)
-    ? normalizeSessionMessageTree(storedMessages)
+    ? normalizeMessageTreeMessages(normalizeSessionMessageTree(storedMessages))
     : undefined;
   const legacyMessages = Array.isArray(storedMessages)
     ? storedMessages

@@ -96,9 +96,10 @@ describe("chat entity normalization", () => {
         model: "model",
         config: {
           useSearch: true,
+          useAgentMode: true,
         },
       } as Session).config,
-    ).toEqual({ useSearch: true });
+    ).toEqual({ useSearch: true, useAgentMode: true });
 
     expect(
       normalizeSession({
@@ -112,6 +113,19 @@ describe("chat entity normalization", () => {
           activeSkills: [],
         },
       } as Session).config,
+    ).toEqual({});
+
+    expect(
+      normalizeSession({
+        id: "s3",
+        title: "New Chat",
+        messageCount: 0,
+        updatedAt: 1,
+        model: "model",
+        config: {
+          useAgentMode: "yes",
+        },
+      } as unknown as Session).config,
     ).toEqual({});
   });
 

@@ -6,6 +6,7 @@ import type {
   Source,
   ToolCall,
 } from "@/types";
+import type { TaskPlanSnapshot } from "@/lib/agent/taskPlan";
 
 export interface MessageOutputBlockBuilderOptions {
   createId?: () => string;
@@ -21,7 +22,12 @@ interface SearchBlockUpdate {
   };
 }
 
-const cloneToolCall = (toolCall: ToolCall): ToolCall => ({ ...toolCall });
+const cloneToolCall = (toolCall: ToolCall): ToolCall => ({
+  ...toolCall,
+  ...(toolCall.resultImages
+    ? { resultImages: toolCall.resultImages.map((image) => ({ ...image })) }
+    : {}),
+});
 
 const cloneImage = (
   image: Extract<MessageOutputBlock, { type: "image" }>["image"],
@@ -47,6 +53,11 @@ const cloneBlock = (block: MessageOutputBlock): MessageOutputBlock => {
       };
     case "image_generation_status":
       return { ...block };
+    case "task_plan":
+      return {
+        ...block,
+        steps: block.steps.map((step) => ({ ...step })),
+      };
     case "tool_group":
       return {
         ...block,
@@ -62,6 +73,17 @@ export function createMessageOutputBlockBuilder(
   const blocks = (options.initialBlocks || []).map(cloneBlock);
   let activeSearchBlockId: string | undefined;
   let activeReasoningBlockId: string | undefined;
+  let taskPlanBlockId: string | undefined;
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index];
+    if (block.type !== "task_plan") continue;
+    if (!taskPlanBlockId) {
+      taskPlanBlockId = block.id;
+      continue;
+    }
+    blocks.splice(index, 1);
+    index -= 1;
+  }
   for (let index = blocks.length - 1; index >= 0; index -= 1) {
     const block = blocks[index];
     if (block.type === "search" && block.isSearching) {
@@ -230,6 +252,38 @@ export function createMessageOutputBlockBuilder(
       if (index === -1) return false;
       blocks.splice(index, 1);
       return true;
+    },
+
+    upsertTaskPlan(plan: TaskPlanSnapshot) {
+      finalizeActiveReasoning();
+      const target = taskPlanBlockId
+        ? blocks.find(
+            (
+              block,
+            ): block is Extract<MessageOutputBlock, { type: "task_plan" }> =>
+              block.type === "task_plan" && block.id === taskPlanBlockId,
+          )
+        : undefined;
+      const steps = plan.steps.map((step) => ({ ...step }));
+
+      if (target) {
+        target.steps = steps;
+        if (plan.note) {
+          target.note = plan.note;
+        } else {
+          delete target.note;
+        }
+        return;
+      }
+
+      const block: Extract<MessageOutputBlock, { type: "task_plan" }> = {
+        id: createId(),
+        type: "task_plan",
+        steps,
+        ...(plan.note ? { note: plan.note } : {}),
+      };
+      blocks.push(block);
+      taskPlanBlockId = block.id;
     },
 
     appendToolCall(toolCall: ToolCall) {

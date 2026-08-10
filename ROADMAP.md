@@ -43,3 +43,8 @@ deployment issues, or simpler implementation paths.
   users should enable only plugins they trust.
 - Skills are text-only prompt context. They do not execute scripts, call
   networks, or access local files.
+- Agent mode is client-side, per-chat orchestration. Its five built-ins are
+  read-only and auto-approved; skill loading remains text-only, JavaScript is
+  confined to a bounded networkless and DOM-less browser sandbox, and Agent web
+  search requires an external provider instead of native Google or OpenAI
+  search.

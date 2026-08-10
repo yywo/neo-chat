@@ -25,6 +25,7 @@ export type OutboundContext =
   | "agent"
   | "metadata"
   | "image"
+  | "sync"
   | "sharedStore";
 
 export interface SafeUrlPolicy {
@@ -281,6 +282,7 @@ export function getSafeUrlPolicy(context: OutboundContext): SafeUrlPolicy {
     case "provider":
     case "rag":
     case "search":
+    case "sync":
       return {
         context,
         allowedProtocols: ["https:", "http:"],

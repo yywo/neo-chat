@@ -1,4 +1,5 @@
 import { v7 as uuidv7 } from "uuid";
+import { createCitationSources } from "@/lib/utils/citations";
 import type { Attachment, Message, Source } from "@/types";
 import type { ModelInfo } from "@/services/api/chatService";
 import {
@@ -16,10 +17,9 @@ import {
   getKnowledgeAttachmentSelectionKey,
   isKnowledgeFileAttachment,
 } from "../utils/knowledgeAttachments";
-import { parseModelString } from "../utils/model";
+import { parseModelString, resolveProviderModelMetadata } from "../utils/model";
 import { resolveOPFSUrl } from "@/utils/opfs";
 import { appendContextToChatInput } from "../utils/chatInput";
-import { hasRagVectorStore } from "../security/localSecretResolvers";
 
 export interface ProcessMessageOptions {
   text: string;
@@ -36,6 +36,7 @@ export interface ProcessMessageOptions {
     serverVectorStoreAvailable?: boolean;
   };
   ragEnabled?: boolean;
+  deferKnowledgeRetrieval?: boolean;
   knowledgeCollections: any[];
   workspaceKnowledgeCollectionIds?: string[];
   signal?: AbortSignal;
@@ -44,6 +45,7 @@ export interface ProcessMessageOptions {
 export interface ProcessedMessageData {
   finalText: string;
   finalAttachments: Attachment[];
+  knowledgeScope: Attachment[];
   ragSources: Source[];
   ragError?: RagQueryError;
   userMessage: Message;
@@ -63,6 +65,7 @@ export async function processMessageForSending(
     customModelMetadata,
     ragConfig,
     ragEnabled = true,
+    deferKnowledgeRetrieval = false,
     knowledgeCollections,
     workspaceKnowledgeCollectionIds = [],
     signal,
@@ -94,8 +97,13 @@ export async function processMessageForSending(
   }
 
   // Check model capability
-  const { modelName: modelId } = parseModelString(selectedModel);
-  const meta = customModelMetadata[modelId] || modelMetadata[modelId];
+  const { providerId, modelName } = parseModelString(selectedModel);
+  const meta = resolveProviderModelMetadata({
+    providerId,
+    modelName,
+    modelMetadata,
+    customModelMetadata,
+  });
   const supportAttachment = meta ? (meta.attachment ?? false) : true;
 
   // Process RAG attachments
@@ -104,10 +112,12 @@ export async function processMessageForSending(
     ...ragConfig,
     enabled: ragConfig.enabled && ragEnabled,
   };
-  const isRagServiceEnabled =
-    effectiveRagConfig.enabled && hasRagVectorStore(effectiveRagConfig);
+  const isRagServiceEnabled = effectiveRagConfig.enabled;
 
-  if (hasKB && isRagServiceEnabled) {
+  if (hasKB && deferKnowledgeRetrieval) {
+    // Agent mode keeps these selectors as the boundary for search_knowledge.
+    // It must not eagerly retrieve or inject the selected knowledge here.
+  } else if (hasKB && isRagServiceEnabled) {
     const fileAttachments = allKBAttachments.filter(isKnowledgeFileAttachment);
 
     const ragResult = await processRAGAttachments(
@@ -170,6 +180,7 @@ export async function processMessageForSending(
   return {
     finalText,
     finalAttachments,
+    knowledgeScope: allKBAttachments.map((attachment) => ({ ...attachment })),
     ragSources,
     ragError,
     userMessage,
@@ -195,6 +206,10 @@ export function createBotMessagePlaceholder(
     timestamp: startTime,
     model: modelDisplayName,
     ragSources: ragSources.length > 0 ? ragSources : undefined,
+    citations:
+      ragSources.length > 0
+        ? createCitationSources({ knowledge: ragSources })
+        : undefined,
     ragError,
     isSearching: false,
   };

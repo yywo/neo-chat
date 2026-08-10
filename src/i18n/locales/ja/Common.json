@@ -15,5 +15,8 @@
   "secretSaved": "暗号化されたキーがローカルに保存されました。元の値は表示できません。",
   "secretNotSaved": "ローカルキーは保存されていません。",
   "secretSaveFailed": "このブラウザーにキーを保存できませんでした。ストレージ権限を確認して、もう一度お試しください。",
-  "replaceSecretPlaceholder": "保存されたキーを置き換えるには、新しいキーを入力してください…"
+  "replaceSecretPlaceholder": "保存されたキーを置き換えるには、新しいキーを入力してください…",
+  "pwaOfflineReadOnly": "オフライン読み取り専用 · 履歴、ローカル検索、ナレッジ、バックアップ出力は利用できます",
+  "pwaUpdateReady": "新しいオフラインアプリのバージョンを利用できます",
+  "pwaReload": "再読み込み"
 }

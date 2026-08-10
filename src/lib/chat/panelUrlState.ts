@@ -17,6 +17,7 @@ export const SETTINGS_TAB_VALUES = [
   "rag",
   "voice",
   "memory",
+  "sync",
   "health",
   "system",
   "about",

@@ -2,6 +2,7 @@ import type {
   Attachment,
   Message,
   MessageOutputBlock,
+  ToolCall,
   Workspace,
 } from "@/types";
 
@@ -20,14 +21,31 @@ export const getAttachmentUrls = (files: Attachment[] = []): string[] => {
   return Array.from(urls);
 };
 
+const getToolCallAttachmentUrls = (toolCalls: ToolCall[] = []): string[] => {
+  const urls = new Set<string>();
+
+  for (const toolCall of toolCalls) {
+    for (const url of getAttachmentUrls(toolCall.resultImages)) {
+      urls.add(url);
+    }
+  }
+
+  return Array.from(urls);
+};
+
 export const getOutputBlockAttachmentUrls = (
   outputBlocks: MessageOutputBlock[] = [],
 ): string[] => {
   const urls = new Set<string>();
 
   for (const block of outputBlocks) {
-    if (block.type !== "image") continue;
-    for (const url of getAttachmentUrls([block.image])) {
+    const blockUrls =
+      block.type === "image"
+        ? getAttachmentUrls([block.image])
+        : block.type === "tool_group"
+          ? getToolCallAttachmentUrls(block.toolCalls)
+          : [];
+    for (const url of blockUrls) {
       urls.add(url);
     }
   }
@@ -52,6 +70,9 @@ export const getMessageAttachmentUrls = (messages: Message[] = []) => {
 
   for (const message of messages) {
     for (const url of getAttachmentUrls(message.attachments)) {
+      urls.add(url);
+    }
+    for (const url of getToolCallAttachmentUrls(message.toolCalls)) {
       urls.add(url);
     }
     for (const url of getOutputBlockAttachmentUrls(message.outputBlocks)) {

@@ -15,6 +15,7 @@ describe("app config normalization", () => {
       normalizeChatConfig({
         useSearch: "yes",
         useReasoning: true,
+        useAgentMode: "yes",
         reasoningMode: "medium",
         useRAG: true,
         temperature: 99,
@@ -22,6 +23,7 @@ describe("app config normalization", () => {
     ).toEqual({
       useSearch: false,
       useReasoning: true,
+      useAgentMode: false,
       reasoningMode: "medium",
       useRAG: true,
       temperature: CHAT_CONFIG_LIMITS.maxTemperature,
@@ -30,6 +32,7 @@ describe("app config normalization", () => {
     expect(normalizeChatConfig({ temperature: Number.NaN }).temperature).toBe(
       DEFAULT_CHAT_CONFIG.temperature,
     );
+    expect(normalizeChatConfig({ useAgentMode: true }).useAgentMode).toBe(true);
   });
 
   it("uses shared defaults for missing app config fields", () => {
@@ -39,7 +42,11 @@ describe("app config normalization", () => {
     expect(DEFAULT_SYSTEM_SETTINGS.enableDestructiveToolConfirmation).toBe(
       true,
     );
+    expect(DEFAULT_SYSTEM_SETTINGS.enableAutoScroll).toBe(false);
     expect(DEFAULT_SYSTEM_SETTINGS.personality).toBe("default");
+    expect(DEFAULT_SYSTEM_SETTINGS.enableAutoImageCompression).toBe(true);
+    expect(DEFAULT_SYSTEM_SETTINGS.imageCompressionMaxSizeMB).toBe(1);
+    expect(DEFAULT_SYSTEM_SETTINGS.imageCompressionMaxWidthOrHeight).toBe(1024);
   });
 
   it("migrates legacy reasoning booleans to reasoning modes", () => {
@@ -72,9 +79,13 @@ describe("app config normalization", () => {
       enableAutoCompression: false,
       compressionThreshold: 999,
       historyKeepCount: 0,
+      enableAutoImageCompression: false,
+      imageCompressionMaxSizeMB: 99,
+      imageCompressionMaxWidthOrHeight: 0,
       enableCodeCollapse: true,
       enableHtmlVisualPrompt: true,
       enableDestructiveToolConfirmation: true,
+      enableAutoScroll: true,
     });
 
     expect(system.systemPrompt).toHaveLength(
@@ -89,15 +100,42 @@ describe("app config normalization", () => {
     expect(system.historyKeepCount).toBe(
       SYSTEM_SETTINGS_LIMITS.minHistoryKeepCount,
     );
+    expect(system.enableAutoImageCompression).toBe(false);
+    expect(system.imageCompressionMaxSizeMB).toBe(
+      SYSTEM_SETTINGS_LIMITS.maxImageCompressionMaxSizeMB,
+    );
+    expect(system.imageCompressionMaxWidthOrHeight).toBe(
+      SYSTEM_SETTINGS_LIMITS.minImageCompressionMaxWidthOrHeight,
+    );
     expect(system.enableCodeCollapse).toBe(true);
     expect(system.enableHtmlVisualPrompt).toBe(true);
     expect(system.enableDestructiveToolConfirmation).toBe(true);
+    expect(system.enableAutoScroll).toBe(true);
     expect(
       normalizeSystemSettings({ enableDestructiveToolConfirmation: "yes" }),
     ).toMatchObject({ enableDestructiveToolConfirmation: true });
     expect(
       normalizeSystemSettings({ enableDestructiveToolConfirmation: false }),
     ).toMatchObject({ enableDestructiveToolConfirmation: false });
+    expect(normalizeSystemSettings({ enableAutoScroll: "yes" })).toMatchObject({
+      enableAutoScroll: false,
+    });
+    expect(normalizeSystemSettings({ enableAutoScroll: true })).toMatchObject({
+      enableAutoScroll: true,
+    });
+    expect(
+      normalizeSystemSettings({
+        enableAutoImageCompression: "yes",
+        imageCompressionMaxSizeMB: Number.NaN,
+        imageCompressionMaxWidthOrHeight: Number.POSITIVE_INFINITY,
+      }),
+    ).toMatchObject({
+      enableAutoImageCompression: true,
+      imageCompressionMaxSizeMB:
+        DEFAULT_SYSTEM_SETTINGS.imageCompressionMaxSizeMB,
+      imageCompressionMaxWidthOrHeight:
+        DEFAULT_SYSTEM_SETTINGS.imageCompressionMaxWidthOrHeight,
+    });
   });
 
   it("normalizes system font size", () => {

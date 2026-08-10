@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const listMcpToolsMock = vi.hoisted(() => vi.fn());
+const discoverMcpToolsMock = vi.hoisted(() => vi.fn());
 const registerServerPluginMock = vi.hoisted(() => vi.fn());
 const decryptOptionalSecretMock = vi.hoisted(() => vi.fn());
 const safeFetchJsonMock = vi.hoisted(() => vi.fn());
@@ -14,7 +14,7 @@ vi.mock("@/lib/api/middleware", async () =>
 vi.mock("@/lib/api/schemas", async () => vi.importActual("../lib/api/schemas"));
 
 vi.mock("@/lib/mcp/client", () => ({
-  listMcpTools: listMcpToolsMock,
+  discoverMcpTools: discoverMcpToolsMock,
 }));
 
 vi.mock("@/lib/plugin/serverRegistry", () => ({
@@ -84,7 +84,7 @@ function createRegistryMcpResponse(
 describe("MCP plugin install route", () => {
   beforeEach(() => {
     vi.resetModules();
-    listMcpToolsMock.mockReset();
+    discoverMcpToolsMock.mockReset();
     registerServerPluginMock.mockReset();
     decryptOptionalSecretMock.mockReset();
     safeFetchJsonMock.mockReset();
@@ -96,17 +96,20 @@ describe("MCP plugin install route", () => {
   });
 
   it("installs a remote MCP server by listing tools and registering a plugin", async () => {
-    listMcpToolsMock.mockResolvedValue([
-      {
-        name: "resolve-library-id",
-        description: "Resolve package docs.",
-        inputSchema: {
-          type: "object",
-          properties: { libraryName: { type: "string" } },
-          required: ["libraryName"],
+    discoverMcpToolsMock.mockResolvedValue({
+      transport: "sse",
+      tools: [
+        {
+          name: "resolve-library-id",
+          description: "Resolve package docs.",
+          inputSchema: {
+            type: "object",
+            properties: { libraryName: { type: "string" } },
+            required: ["libraryName"],
+          },
         },
-      },
-    ]);
+      ],
+    });
 
     const { POST } = await import("../app/api/plugins/install/route");
     const response = await POST(
@@ -140,9 +143,10 @@ describe("MCP plugin install route", () => {
       allowedProtocols: ["https:"],
       allowedHosts: ["registry.modelcontextprotocol.io"],
     });
-    expect(listMcpToolsMock).toHaveBeenCalledWith(
+    expect(discoverMcpToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         serverUrl: "https://mcp.example.com/mcp",
+        transport: "streamable-http",
         staticHeaders: {
           "X-Client": "neo-chat",
         },
@@ -158,6 +162,7 @@ describe("MCP plugin install route", () => {
           }),
         ],
         mcp: expect.objectContaining({
+          transport: "sse",
           headers: {
             "X-Client": "neo-chat",
           },
@@ -181,13 +186,16 @@ describe("MCP plugin install route", () => {
   });
 
   it("uses registry MCP metadata instead of client-supplied marketplace endpoint data", async () => {
-    listMcpToolsMock.mockResolvedValue([
-      {
-        name: "resolve-library-id",
-        description: "Resolve package docs.",
-        inputSchema: { type: "object", properties: {} },
-      },
-    ]);
+    discoverMcpToolsMock.mockResolvedValue({
+      transport: "streamable-http",
+      tools: [
+        {
+          name: "resolve-library-id",
+          description: "Resolve package docs.",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+    });
     safeFetchJsonMock.mockResolvedValueOnce({
       response: new Response("{}", { status: 200 }),
       data: createRegistryMcpResponse(),
@@ -222,7 +230,7 @@ describe("MCP plugin install route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(listMcpToolsMock).toHaveBeenCalledWith(
+    expect(discoverMcpToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         serverUrl: "https://mcp.example.com/mcp",
         staticHeaders: {
@@ -244,7 +252,10 @@ describe("MCP plugin install route", () => {
   });
 
   it("rejects MCP servers that do not expose tools", async () => {
-    listMcpToolsMock.mockResolvedValue([]);
+    discoverMcpToolsMock.mockResolvedValue({
+      transport: "streamable-http",
+      tools: [],
+    });
     safeFetchJsonMock.mockResolvedValueOnce({
       response: new Response("{}", { status: 200 }),
       data: createRegistryMcpResponse({
@@ -287,17 +298,20 @@ describe("MCP plugin install route", () => {
 
   it("installs a custom auth-required MCP server with install-time bearer auth", async () => {
     decryptOptionalSecretMock.mockResolvedValue("secret-token");
-    listMcpToolsMock.mockResolvedValue([
-      {
-        name: "private-search",
-        description: "Search private data.",
-        inputSchema: {
-          type: "object",
-          properties: { query: { type: "string" } },
-          required: ["query"],
+    discoverMcpToolsMock.mockResolvedValue({
+      transport: "streamable-http",
+      tools: [
+        {
+          name: "private-search",
+          description: "Search private data.",
+          inputSchema: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            required: ["query"],
+          },
         },
-      },
-    ]);
+      ],
+    });
 
     const { POST } = await import("../app/api/plugins/install/route");
     const response = await POST(
@@ -344,7 +358,7 @@ describe("MCP plugin install route", () => {
       }),
       "plugin:custom-mcp-private-123456:auth",
     );
-    expect(listMcpToolsMock).toHaveBeenCalledWith(
+    expect(discoverMcpToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         serverUrl: "https://mcp.example.com/mcp",
         authConfig: {
@@ -442,7 +456,7 @@ describe("MCP plugin install route", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: "MCP server requires authentication before tools can be listed",
     });
-    expect(listMcpToolsMock).not.toHaveBeenCalled();
+    expect(discoverMcpToolsMock).not.toHaveBeenCalled();
     expect(registerServerPluginMock).not.toHaveBeenCalled();
   });
 });

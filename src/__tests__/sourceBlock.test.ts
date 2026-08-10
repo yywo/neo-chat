@@ -57,4 +57,18 @@ describe("source block presentation", () => {
       label: "Searching...",
     });
   });
+
+  it("prefers returned results over a stale search error", () => {
+    expect(
+      getSourceBlockPresentation({
+        sourceCount: 1,
+        imageCount: 0,
+        error: "Search request failed",
+      }),
+    ).toMatchObject({
+      shouldRender: true,
+      hasSources: true,
+      label: "Sources",
+    });
+  });
 });

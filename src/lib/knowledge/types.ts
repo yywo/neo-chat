@@ -9,6 +9,14 @@ export type KnowledgeFileStorageStatus =
 export type KnowledgeFileIndexStatus =
   "not_indexed" | "indexing" | "indexed" | "error";
 
+export type KnowledgeChunkingStrategy = "auto" | "recursive" | "markdown";
+
+export interface KnowledgeChunkingConfig {
+  strategy: KnowledgeChunkingStrategy;
+  chunkSize: number;
+  overlapPercent: number;
+}
+
 export interface KnowledgeFile {
   id: string;
   name: string;
@@ -19,6 +27,7 @@ export interface KnowledgeFile {
   status: KnowledgeFileStatus;
   ragId?: string;
   ragChunkCount?: number;
+  indexedChunkingRevision?: string;
   /** @deprecated Compatibility alias for contentPath. */
   path?: string;
   sourcePath?: string;
@@ -42,5 +51,7 @@ export interface Collection {
   icon: string;
   color: string;
   files: KnowledgeFile[];
+  chunking: KnowledgeChunkingConfig;
+  chunkingRevision: string;
   updatedAt: number;
 }

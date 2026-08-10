@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale } from "next-intl/server";
+import PwaLifecycle from "@/components/pwa/PwaLifecycle";
+import SyncLifecycleLoader from "@/components/sync/SyncLifecycleLoader";
 import {
   absoluteUrl,
   getSeoOpenGraphImages,
@@ -9,6 +11,7 @@ import {
   normalizeSeoLocale,
   SITE_NAME,
 } from "@/lib/seo";
+import { getDeploymentMode } from "@/lib/security/deployment";
 import {
   DARK_THEME_COLOR,
   LIGHT_THEME_COLOR,
@@ -88,7 +91,11 @@ export default async function RootLayout({
     <html lang={locale} suppressHydrationWarning>
       <body className="antialiased">
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
-        <NextIntlClientProvider>{children}</NextIntlClientProvider>
+        <NextIntlClientProvider>
+          {children}
+          <SyncLifecycleLoader />
+          <PwaLifecycle deploymentMode={getDeploymentMode()} />
+        </NextIntlClientProvider>
       </body>
     </html>
   );

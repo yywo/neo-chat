@@ -2,7 +2,6 @@ import { v7 as uuidv7 } from "uuid";
 import type { Attachment } from "@/types";
 import { ATTACHMENT_LIMITS } from "@/config/limits";
 import { getRemoteAttachmentUrlError } from "../security/remoteAttachment";
-import { ensureImageDisplayCache } from "./imageDisplayCache";
 
 const IMAGE_MIME_RE = /^image\/[a-z0-9.+-]+$/i;
 
@@ -91,18 +90,4 @@ export function normalizeGeneratedImageAttachments(
   }
 
   return attachments;
-}
-
-export async function cacheGeneratedImageAttachments(
-  attachments: Attachment[],
-  options: Parameters<typeof ensureImageDisplayCache>[1] = {},
-): Promise<Attachment[]> {
-  return Promise.all(
-    attachments.map((attachment) =>
-      ensureImageDisplayCache(attachment, {
-        prefix: "images/generated",
-        ...options,
-      }),
-    ),
-  );
 }

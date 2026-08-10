@@ -29,9 +29,11 @@ import {
   Library,
   PencilSparkles,
   Sparkles,
+  Quote,
+  Bot,
 } from "lucide-react";
 import { useTranslations } from "next-intl";
-import type { Attachment, ReasoningMode } from "@/types";
+import type { Attachment, MessageReplyReference, ReasoningMode } from "@/types";
 import { localizePluginMeta } from "@/lib/plugin/localizedMeta";
 import type { ModelInfo } from "@/services/api/chatService";
 import Tooltip from "../ui/Tooltip";
@@ -83,6 +85,10 @@ import { isPluginAuthRequired } from "@/lib/plugin/config";
 import { isKnowledgeAttachment } from "@/lib/utils/knowledgeAttachments";
 import { createChatDocumentAttachment } from "@/lib/utils/documentAttachments";
 import { ensureImageDisplayCache } from "@/lib/utils/imageDisplayCache";
+import {
+  compressImageFile,
+  getImageCompressionConfig,
+} from "@/lib/utils/imageCompression";
 import { polishTextContent } from "@/services/artifactService";
 import { normalizeSkillIdRefs } from "@/lib/skills";
 import {
@@ -96,22 +102,38 @@ import {
   normalizeReasoningMode,
 } from "@/lib/chat/reasoning";
 import {
+  clearComposerDraft,
+  readComposerDraft,
+  writeComposerDraft,
+} from "@/lib/chat/composerDrafts";
+import {
   useComposerCapabilityState,
   useComposerMenuState,
 } from "@/features/chat";
+import type { ComposerSkillParameterValues } from "@/components/skill/SkillParameterDialog";
 
 type MessageInputVariant = "default" | "hero";
 
 interface MessageInputProps {
-  onSend: (text: string, attachments: Attachment[]) => void;
+  onSend: (
+    text: string,
+    attachments: Attachment[],
+    replyTo?: MessageReplyReference,
+    skillParameters?: ComposerSkillParameterValues,
+  ) => void;
+  onPrepareSend?: () => Promise<ComposerSkillParameterValues | null>;
   onStop?: () => void;
   disabled: boolean;
+  offline?: boolean;
   availableModels?: ModelInfo[];
   selectedModel?: string;
   onSelectModel?: (model: string) => void;
   isSearchEnabled?: boolean;
   onToggleSearch?: () => void;
   variant?: MessageInputVariant;
+  replyTo?: MessageReplyReference;
+  onCancelReply?: () => void;
+  onNavigateReply?: (messageId: string) => void;
 }
 
 export interface MessageInputRef {
@@ -134,18 +156,34 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
   (
     {
       onSend,
+      onPrepareSend,
       onStop,
       disabled,
+      offline = false,
       availableModels = [],
       selectedModel = "",
       onSelectModel,
       isSearchEnabled = false,
       onToggleSearch,
       variant = "default",
+      replyTo,
+      onCancelReply,
+      onNavigateReply,
     },
     ref,
   ) => {
-    const [input, setInput] = useState("");
+    const [input, setInputState] = useState("");
+    const inputValueRef = useRef("");
+    const setInput = useCallback((next: React.SetStateAction<string>) => {
+      setInputState((previous) => {
+        const value =
+          typeof next === "function"
+            ? (next as (previous: string) => string)(previous)
+            : next;
+        inputValueRef.current = value;
+        return value;
+      });
+    }, []);
     const [attachments, setAttachments] = useState<Attachment[]>([]);
     const [isRecording, setIsRecording] = useState(false);
     const [isTranscribing, setIsTranscribing] = useState(false);
@@ -168,6 +206,7 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
     const [isDragUploadActive, setIsDragUploadActive] = useState(false);
     const [isPolishingInput, setIsPolishingInput] = useState(false);
     const [isParsingAttachments, setIsParsingAttachments] = useState(false);
+    const [isPreparingSend, setIsPreparingSend] = useState(false);
 
     const t = useTranslations("MessageInput");
     const tConfig = useTranslations("Config");
@@ -189,6 +228,7 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       voice,
       search,
       rag,
+      system,
       serverConfig,
     } = useSettingsStore();
 
@@ -204,6 +244,39 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
     const attachImageInputId = useId();
     const attachTextFallbackInputId = useId();
     const isHeroVariant = variant === "hero";
+    const draftSessionRef = useRef<string | null>(null);
+
+    useEffect(() => {
+      const previousSessionId = draftSessionRef.current;
+      if (previousSessionId && previousSessionId !== currentSessionId) {
+        writeComposerDraft(previousSessionId, inputValueRef.current);
+      }
+
+      draftSessionRef.current = currentSessionId || null;
+      const draft = currentSessionId ? readComposerDraft(currentSessionId) : "";
+      inputValueRef.current = draft;
+      setInputState(draft);
+    }, [currentSessionId]);
+
+    useEffect(() => {
+      if (!currentSessionId || draftSessionRef.current !== currentSessionId) {
+        return;
+      }
+
+      const timer = window.setTimeout(() => {
+        writeComposerDraft(currentSessionId, input);
+      }, 150);
+      return () => window.clearTimeout(timer);
+    }, [currentSessionId, input]);
+
+    useEffect(
+      () => () => {
+        if (draftSessionRef.current) {
+          writeComposerDraft(draftSessionRef.current, inputValueRef.current);
+        }
+      },
+      [],
+    );
 
     // Browser Speech Rec
     const recognitionRef = useRef<any>(null);
@@ -505,6 +578,7 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
     );
     const {
       modelCapabilities,
+      agentModeEnabled,
       isReasoningSupported,
       currentReasoningMode,
       isReasoningEnabledForMode,
@@ -516,8 +590,41 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       customModelMetadata,
       reasoningMode: chatConfig.reasoningMode,
       useReasoning: chatConfig.useReasoning,
+      useAgentMode: chatConfig.useAgentMode ?? false,
       reasoningOptionLabels,
     });
+    const agentModeTooltip = !modelCapabilities.toolCall
+      ? t("agentModeUnavailable")
+      : agentModeEnabled
+        ? t("disableAgentMode")
+        : t("enableAgentMode");
+    const agentSearchRequiresExternalProvider =
+      agentModeEnabled &&
+      isSearchEnabled &&
+      searchCompatibility.mode !== "external";
+    const searchToggleTooltip = agentSearchRequiresExternalProvider
+      ? t("agentSearchRequiresExternalProvider")
+      : searchTooltip;
+    const searchToggleAriaLabel = agentSearchRequiresExternalProvider
+      ? t("agentSearchRequiresExternalProvider")
+      : !searchCompatibility.enabled
+        ? getSearchUnavailableMessage(searchCompatibility.reason)
+        : isSearchEnabled
+          ? t("disableSearchAria")
+          : t("enableSearchAria");
+
+    const handleAgentModeToggle = () => {
+      if (!modelCapabilities.toolCall) {
+        setErrorMsg(t("agentModeUnavailable"));
+        return;
+      }
+
+      const useAgentMode = !agentModeEnabled;
+      setChatConfig({ useAgentMode });
+      if (currentSessionId) {
+        updateSessionConfig(currentSessionId, { useAgentMode });
+      }
+    };
 
     // Filter plugins to show only those ready for use
     const validPlugins = useMemo(() => {
@@ -563,25 +670,41 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         })
       ) {
         e.preventDefault();
-        handleSend();
+        void handleSend();
       }
     };
 
-    const handleSend = () => {
+    const handleSend = async () => {
       if (
         (!input.trim() && attachments.length === 0) ||
         disabled ||
+        offline ||
         isParsingAttachments ||
+        isPreparingSend ||
         !selectedModel
       ) {
         return;
       }
 
-      onSend(input, attachments);
-      setInput("");
-      setAttachments([]);
-      if (textareaRef.current) {
-        textareaRef.current.style.height = "auto";
+      setIsPreparingSend(true);
+      setErrorMsg(null);
+      try {
+        const skillParameters = onPrepareSend
+          ? await onPrepareSend()
+          : undefined;
+        if (onPrepareSend && !skillParameters) return;
+        onSend(input, attachments, replyTo, skillParameters || undefined);
+        setInput("");
+        if (currentSessionId) clearComposerDraft(currentSessionId);
+        setAttachments([]);
+        if (textareaRef.current) {
+          textareaRef.current.style.height = "auto";
+        }
+      } catch (error) {
+        logInputError("Failed to prepare message send:", error);
+        setErrorMsg(error instanceof Error ? error.message : String(error));
+      } finally {
+        if (isMountedRef.current) setIsPreparingSend(false);
       }
     };
 
@@ -590,6 +713,7 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       if (
         !originalText.trim() ||
         disabled ||
+        offline ||
         isTranscribing ||
         isParsingAttachments ||
         isPolishingInput
@@ -634,6 +758,7 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
     };
 
     const startRecording = async () => {
+      if (offline) return;
       setErrorMsg(null);
       if (voice.autoTranscribe && voice.sttProvider === "browser") {
         const sessionId = recordingSessionRef.current + 1;
@@ -934,7 +1059,7 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         closeAttachMenu = false,
       }: { documentsOnly?: boolean; closeAttachMenu?: boolean } = {},
     ) => {
-      if (files.length === 0) return;
+      if (offline || files.length === 0) return;
 
       const runId = fileSelectionRunRef.current + 1;
       fileSelectionRunRef.current = runId;
@@ -980,7 +1105,13 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
                 continue;
               }
 
-              const base64 = await fileToBase64(file);
+              const preparedFile = file.type.startsWith("image/")
+                ? await compressImageFile(
+                    file,
+                    getImageCompressionConfig(system),
+                  )
+                : file;
+              const base64 = await fileToBase64(preparedFile);
               if (
                 !isMountedRef.current ||
                 fileSelectionRunRef.current !== runId
@@ -991,9 +1122,9 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
 
               const attachment: Attachment = {
                 id: uuidv7(),
-                mimeType: file.type || "application/octet-stream",
+                mimeType: preparedFile.type || "application/octet-stream",
                 data: base64Data,
-                fileName: file.name,
+                fileName: preparedFile.name,
               };
 
               newAttachments.push(
@@ -1097,7 +1228,9 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       selectedModel ||
       t("noModelSelected");
     const hasKnowledgeAttachments = attachments.some(isKnowledgeAttachment);
-    const isInputBusy = disabled || isTranscribing || isParsingAttachments;
+    const isInputBusy =
+      disabled || isTranscribing || isParsingAttachments || isPreparingSend;
+    const attachmentActionsDisabled = isInputBusy || offline;
     const textareaMinHeightClass = isHeroVariant
       ? "min-h-[5em]"
       : "min-h-[2em]";
@@ -1107,7 +1240,9 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       Array.from(types).includes("Files");
 
     const handleComposerDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
-      if (isInputBusy || !eventHasFiles(e.dataTransfer.types)) return;
+      if (attachmentActionsDisabled || !eventHasFiles(e.dataTransfer.types)) {
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       dragDepthRef.current += 1;
@@ -1115,7 +1250,9 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
     };
 
     const handleComposerDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-      if (isInputBusy || !eventHasFiles(e.dataTransfer.types)) return;
+      if (attachmentActionsDisabled || !eventHasFiles(e.dataTransfer.types)) {
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       e.dataTransfer.dropEffect = "copy";
@@ -1133,7 +1270,7 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
     };
 
     const handleComposerDrop = (e: React.DragEvent<HTMLDivElement>) => {
-      if (isInputBusy) return;
+      if (attachmentActionsDisabled) return;
       const files = extractChatAttachmentFilesFromDrop(e.dataTransfer);
       if (files.length === 0) return;
       e.preventDefault();
@@ -1146,7 +1283,7 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
     const handleComposerPaste = (
       e: React.ClipboardEvent<HTMLTextAreaElement>,
     ) => {
-      if (isInputBusy) return;
+      if (attachmentActionsDisabled) return;
       const files = extractChatAttachmentFilesFromClipboard(e.clipboardData);
       if (files.length === 0) return;
       e.preventDefault();
@@ -1229,6 +1366,30 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         )}
 
         {/* Attachments Preview Area */}
+        {replyTo ? (
+          <div className="mx-3 mt-3 flex items-start gap-2 rounded-lg border border-border/70 bg-muted/35 px-3 py-2 text-xs text-muted-foreground">
+            <button
+              type="button"
+              onClick={() => onNavigateReply?.(replyTo.messageId)}
+              className={`flex min-w-0 flex-1 items-start gap-2 rounded text-left transition-colors hover:text-foreground ${iconButtonFocusClass}`}
+              aria-label={t("openReplySource")}
+            >
+              <Quote size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
+              <span className="line-clamp-2 wrap-break-word">
+                {replyTo.excerpt || t("replySourceUnavailable")}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={onCancelReply}
+              className={`shrink-0 rounded p-0.5 transition-colors hover:bg-accent hover:text-foreground ${iconButtonFocusClass}`}
+              aria-label={t("cancelReply")}
+            >
+              <X size={13} aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
+
         <MessageInputAttachmentTray
           attachments={attachments}
           onRemove={removeAttachment}
@@ -1243,7 +1404,7 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
           id={messageInputId}
           name="message"
           ref={textareaRef}
-          className={`w-full px-4 pt-3 bg-transparent focus:outline-0 text-gray-800 dark:text-foreground placeholder-gray-500 dark:placeholder:text-muted-foreground resize-none max-h-32 md:max-h-48 text-(length:--neo-font-size-base) leading-5 ${textareaMinHeightClass} overflow-y-auto overscroll-contain custom-scrollbar`}
+          className={`w-full px-2 pt-3 bg-transparent focus:outline-0 text-gray-800 dark:text-foreground placeholder-gray-500 dark:placeholder:text-muted-foreground resize-none max-h-32 md:max-h-48 text-(length:--neo-font-size-base) leading-5 ${textareaMinHeightClass} overflow-y-auto overscroll-contain custom-scrollbar`}
           placeholder={
             isRecording
               ? voice.sttProvider === "browser"
@@ -1259,6 +1420,14 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
           onPaste={handleComposerPaste}
           disabled={isInputBusy}
         />
+        {offline ? (
+          <p
+            className="px-4 pb-1 text-[11px] text-amber-700 dark:text-amber-300"
+            role="status"
+          >
+            {t("offlineDraftSaved")}
+          </p>
+        ) : null}
 
         {/* Toolbar */}
         <div className="flex flex-wrap items-center justify-between gap-1 p-1 md:flex-nowrap md:gap-2 md:p-2">
@@ -1321,7 +1490,7 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
                           ? "bg-gray-100 dark:bg-accent text-gray-800 dark:text-foreground"
                           : "text-gray-500 dark:text-muted-foreground hover:text-gray-700 dark:hover:text-foreground hover:bg-gray-100 dark:hover:bg-accent/50"
                       }`}
-                      disabled={isInputBusy}
+                      disabled={attachmentActionsDisabled}
                     >
                       <Paperclip size={16} aria-hidden="true" />
                     </button>
@@ -1369,7 +1538,7 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
                     onSelect={() => {
                       setShowKBModal(true);
                     }}
-                    disabled={isInputBusy}
+                    disabled={attachmentActionsDisabled}
                   >
                     <Library
                       size={14}
@@ -1501,9 +1670,13 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
               >
                 <Tooltip
                   content={
-                    activePlugins.length > 0
-                      ? t("activePluginsCount", { count: activePlugins.length })
-                      : t("plugins")
+                    !modelCapabilities.toolCall
+                      ? t("agentModeUnavailable")
+                      : activePlugins.length > 0
+                        ? t("activePluginsCount", {
+                            count: activePlugins.length,
+                          })
+                        : t("plugins")
                   }
                   position="top"
                 >
@@ -1518,7 +1691,7 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
                           : t("plugins")
                       }
                       className={`${iconButtonBaseClass} transition-colors ${iconButtonFocusClass} ${activePlugins.length > 0 ? "text-cyan-500 dark:text-cyan-400 hover:bg-cyan-50 dark:hover:bg-cyan-900/20" : "text-gray-500 dark:text-muted-foreground hover:text-gray-700 dark:hover:text-foreground hover:bg-gray-100 dark:hover:bg-accent/50"}`}
-                      disabled={isInputBusy}
+                      disabled={isInputBusy || !modelCapabilities.toolCall}
                     >
                       <Blocks size={16} aria-hidden="true" />
                     </button>
@@ -1733,18 +1906,10 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
             {/* Search Button */}
             {onToggleSearch && (
               <div>
-                <Tooltip content={searchTooltip} position="top">
+                <Tooltip content={searchToggleTooltip} position="top">
                   <button
                     type="button"
-                    aria-label={
-                      !searchCompatibility.enabled
-                        ? getSearchUnavailableMessage(
-                            searchCompatibility.reason,
-                          )
-                        : isSearchEnabled
-                          ? t("disableSearchAria")
-                          : t("enableSearchAria")
-                    }
+                    aria-label={searchToggleAriaLabel}
                     aria-pressed={
                       isSearchEnabled && searchCompatibility.enabled
                     }
@@ -1763,6 +1928,31 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
                 </Tooltip>
               </div>
             )}
+
+            {/* Agent Mode Button */}
+            <div>
+              <Tooltip content={agentModeTooltip} position="top">
+                <button
+                  type="button"
+                  aria-label={agentModeTooltip}
+                  aria-pressed={
+                    modelCapabilities.toolCall ? agentModeEnabled : undefined
+                  }
+                  aria-disabled={!modelCapabilities.toolCall ? true : undefined}
+                  className={`${iconButtonBaseClass} transition-colors ${iconButtonFocusClass} ${
+                    agentModeEnabled
+                      ? "text-blue-500 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20"
+                      : !modelCapabilities.toolCall
+                        ? "text-gray-400 dark:text-muted-foreground/60"
+                        : "text-gray-500 dark:text-muted-foreground hover:text-gray-700 dark:hover:text-foreground hover:bg-gray-100 dark:hover:bg-accent/50"
+                  }`}
+                  onClick={handleAgentModeToggle}
+                  disabled={isInputBusy}
+                >
+                  <Bot size={16} aria-hidden="true" />
+                </button>
+              </Tooltip>
+            </div>
           </div>
 
           <div className="flex shrink-0 items-center gap-0.5">
@@ -1778,7 +1968,7 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
                   setShowModelSelect(open && availableModels.length > 0);
                 }}
               >
-                <Tooltip content={currentModelName} position="top">
+                <Tooltip content={currentModelName} position="top" portal>
                   <DropdownMenuTrigger asChild>
                     <button
                       type="button"
@@ -1861,7 +2051,9 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
                   type="button"
                   aria-label={t("polishTextAria")}
                   aria-busy={isPolishingInput || undefined}
-                  disabled={isInputBusy || isPolishingInput || !input.trim()}
+                  disabled={
+                    isInputBusy || offline || isPolishingInput || !input.trim()
+                  }
                   className={`${iconButtonBaseClass} transition-colors ${iconButtonFocusClass} ${
                     input.trim()
                       ? "text-gray-500 dark:text-muted-foreground hover:text-gray-700 dark:hover:text-foreground hover:bg-gray-100 dark:hover:bg-accent/50"
@@ -1928,9 +2120,9 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
                   <button
                     type="button"
                     aria-label={t("sendMessageAria")}
-                    disabled={!selectedModel || isParsingAttachments}
+                    disabled={offline || !selectedModel || isParsingAttachments}
                     className={`${iconButtonBaseClass} bg-gray-100 text-gray-500 shadow-sm transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-accent dark:text-muted-foreground dark:hover:bg-accent/80 ${iconButtonFocusClass}`}
-                    onClick={handleSend}
+                    onClick={() => void handleSend()}
                   >
                     <SendHorizontal size={16} aria-hidden="true" />
                   </button>
@@ -1970,6 +2162,7 @@ const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
                       aria-pressed={isRecording}
                       className={`${iconButtonBaseClass} transition-[background-color,color,box-shadow] ${iconButtonFocusClass} ${isRecording ? "bg-red-50 dark:bg-red-900/30 text-red-500 dark:text-red-400 ring-1 ring-red-200 dark:ring-red-800" : "text-gray-500 dark:text-muted-foreground hover:text-gray-700 dark:hover:text-foreground hover:bg-gray-100 dark:hover:bg-accent/50"}`}
                       onClick={toggleRecording}
+                      disabled={offline}
                     >
                       {isRecording ? (
                         <StopCircle size={16} aria-hidden="true" />

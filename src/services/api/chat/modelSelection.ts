@@ -1,17 +1,27 @@
 import { getTaskModel, useSettingsStore } from "@/store/core/settingsStore";
 import type { ModelMetadata } from "@/types";
-import { parseModelString, supportsTextOutput } from "@/lib/utils/model";
+import {
+  parseModelString,
+  resolveProviderModelMetadata,
+  supportsTextOutput,
+} from "@/lib/utils/model";
 
 export function resolveModelMetadata(
   modelName: string,
+  providerId?: string,
 ): ModelMetadata | undefined {
   const { modelMetadata, customModelMetadata } = useSettingsStore.getState();
-  return customModelMetadata?.[modelName] || modelMetadata?.[modelName];
+  return resolveProviderModelMetadata({
+    providerId,
+    modelName,
+    modelMetadata,
+    customModelMetadata,
+  });
 }
 
 function resolveModelStringMetadata(model: string): ModelMetadata | undefined {
-  const { modelName } = parseModelString(model);
-  return resolveModelMetadata(modelName);
+  const { providerId, modelName } = parseModelString(model);
+  return resolveModelMetadata(modelName, providerId);
 }
 
 export function resolveTextGenerationModel({
@@ -39,7 +49,7 @@ export function resolveTextGenerationModel({
     .flatMap((provider) =>
       (provider.models || []).map((modelName) => ({
         id: `${provider.id}:${modelName}`,
-        metadata: resolveModelMetadata(modelName),
+        metadata: resolveModelMetadata(modelName, provider.id),
       })),
     )
     .find((candidate) => supportsTextOutput(candidate.metadata));

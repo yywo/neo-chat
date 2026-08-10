@@ -40,6 +40,7 @@ vi.mock("../lib/byok/client", () => ({
     pluginAuth: (pluginId: string) => `plugin:${pluginId}:auth`,
   },
   encryptSecret: encryptSecretMock,
+  fetchWithByokRetry: vi.fn((requestFactory) => requestFactory()),
 }));
 
 const pluginA: Plugin = {
@@ -502,6 +503,70 @@ describe("plugin market service cache", () => {
     );
   });
 
+  it("encrypts marketplace MCP auth before install-time discovery", async () => {
+    encryptSecretMock.mockResolvedValue({
+      v: 1,
+      kid: "test-key",
+      alg: "RSA-OAEP-256+A256GCM",
+      iv: "iv",
+      wrappedKey: "wrappedKey",
+      ciphertext: "ciphertext",
+      context: "plugin:mcp:private:1.0.0:auth",
+    });
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const payload = JSON.parse(String(init?.body || "{}"));
+        return jsonResponse({ plugin: payload.plugin });
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const plugin: Plugin = {
+      id: "mcp:private:1.0.0",
+      title: "private",
+      description: "",
+      logoUrl: "",
+      manifestUrl: "",
+      source: "mcp",
+      functions: [],
+      auth: {
+        type: "apiKey",
+        name: "X-API-Key",
+        in: "header",
+        required: true,
+      },
+      mcp: {
+        transport: "streamable-http",
+        serverUrl: "https://mcp.example.com/mcp",
+        serverName: "private",
+        serverVersion: "1.0.0",
+        toolNameMap: {},
+      },
+    };
+
+    const { installPlugin } = await import("../services/api/pluginService");
+    await installPlugin(plugin, "market-secret");
+
+    expect(encryptSecretMock).toHaveBeenCalledWith(
+      "market-secret",
+      "plugin:mcp:private:1.0.0:auth",
+    );
+    const [, requestInit] = getFetchCalls(fetchMock)[0];
+    const serializedBody = String(requestInit?.body || "");
+    const payload = JSON.parse(serializedBody);
+    expect(serializedBody).not.toContain("market-secret");
+    expect(payload).toMatchObject({
+      plugin: { id: plugin.id },
+      authConfig: {
+        type: "apiKey",
+        key: "X-API-Key",
+        addTo: "header",
+        valueSecret: {
+          context: "plugin:mcp:private:1.0.0:auth",
+        },
+      },
+    });
+  });
+
   it("installs a custom MCP server without auth through the shared install API", async () => {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -624,6 +689,100 @@ describe("plugin market service cache", () => {
           context: "plugin:custom-mcp-private-docs-123:auth",
         },
       },
+    });
+  });
+
+  it("discovers bridge servers without sending plaintext tokens or commands", async () => {
+    encryptSecretMock.mockResolvedValue({
+      v: 1,
+      kid: "test-key",
+      alg: "RSA-OAEP-256+A256GCM",
+      iv: "iv",
+      wrappedKey: "wrappedKey",
+      ciphertext: "ciphertext",
+      context: "mcp:bridge-discovery",
+    });
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        servers: [
+          {
+            id: "private-docs",
+            label: "Private Docs",
+            source: "bridge",
+            transport: "streamable-http",
+            serverUrl: "http://mcp-bridge:3400/mcp/private-docs",
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { discoverMcpBridgeServers } =
+      await import("../services/api/pluginService");
+    const servers = await discoverMcpBridgeServers({
+      manifestUrl: "http://mcp-bridge:3400/servers",
+      bearerToken: "bridge-plaintext-token",
+    });
+
+    expect(encryptSecretMock).toHaveBeenCalledWith(
+      "bridge-plaintext-token",
+      "mcp:bridge-discovery",
+    );
+    const [url, requestInit] = getFetchCalls(fetchMock)[0];
+    expect(url).toBe("/api/plugins/mcp-bridge/discover");
+    const serializedBody = String(requestInit?.body || "");
+    expect(serializedBody).not.toContain("bridge-plaintext-token");
+    expect(serializedBody).not.toContain("command");
+    expect(serializedBody).not.toContain("args");
+    expect(serializedBody).not.toContain("env");
+    expect(JSON.parse(serializedBody)).toEqual({
+      manifestUrl: "http://mcp-bridge:3400/servers",
+      tokenSecret: expect.objectContaining({
+        context: "mcp:bridge-discovery",
+      }),
+    });
+    expect(servers).toEqual([
+      {
+        id: "private-docs",
+        label: "Private Docs",
+        source: "bridge",
+        transport: "streamable-http",
+        serverUrl: "http://mcp-bridge:3400/mcp/private-docs",
+      },
+    ]);
+  });
+
+  it("marks bridge imports in ordinary streamable HTTP MCP metadata", async () => {
+    encryptSecretMock.mockResolvedValue({
+      v: 1,
+      kid: "test-key",
+      alg: "RSA-OAEP-256+A256GCM",
+      iv: "iv",
+      wrappedKey: "wrappedKey",
+      ciphertext: "ciphertext",
+      context: "plugin:custom-mcp-private-docs-123:auth",
+    });
+    vi.spyOn(Date, "now").mockReturnValue(123);
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const payload = JSON.parse(String(init?.body || "{}"));
+        return jsonResponse({ plugin: payload.plugin });
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { installCustomMcpServer } =
+      await import("../services/api/pluginService");
+    const plugin = await installCustomMcpServer({
+      name: "Private Docs",
+      serverUrl: "http://mcp-bridge:3400/mcp/private-docs",
+      bearerToken: "bridge-token",
+      source: "bridge",
+    });
+
+    expect(plugin.mcp).toMatchObject({
+      transport: "streamable-http",
+      source: "bridge",
     });
   });
 });

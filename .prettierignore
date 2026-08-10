@@ -19,6 +19,9 @@ cloudflare-env.d.ts
 next-env.d.ts
 *.tsbuildinfo
 
+# Static host configuration
+public/_headers
+
 # Local environment files
 .env*
 !.env.example

@@ -21,11 +21,15 @@ describe("MCP executor", () => {
     const { executeMcpToolRequest } = await import("../lib/mcp/executor");
     const result = await executeMcpToolRequest({
       serverUrl: "https://mcp.example.com/mcp",
+      transport: "sse",
       toolName: "private-search",
       args: {},
     });
 
     expect(result).toEqual({ error: "No access" });
+    expect(callMcpToolMock).toHaveBeenCalledWith(
+      expect.objectContaining({ transport: "sse" }),
+    );
   });
 
   it("truncates oversized MCP success results without marking them as errors", async () => {

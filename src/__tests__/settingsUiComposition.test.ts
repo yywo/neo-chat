@@ -92,6 +92,43 @@ describe("settings UI primitives", () => {
     expect(systemSettings).toContain(
       'ariaLabel={t("destructiveToolConfirmationAria")}',
     );
+    expect(systemSettings).toContain('name="enableAutoScroll"');
+    expect(systemSettings).toContain('ariaLabel={t("autoScrollAria")}');
+    expect(systemSettings).toContain('name="enableAutoImageCompression"');
+    expect(systemSettings).toContain('name="imageCompressionMaxSizeMB"');
+    expect(systemSettings).toContain('name="imageCompressionMaxWidthOrHeight"');
+    expect(systemSettings).toContain(
+      'aria-valuetext={t("imageCompressionSizeValue"',
+    );
+    expect(systemSettings).toContain(
+      'aria-valuetext={t("imageCompressionDimensionValue"',
+    );
+    expect(systemSettings).toContain("sm:grid-cols-2");
+    expect(systemSettings).toContain("imageCompressionAspectRatioNote");
+    expect(systemSettings).toContain(
+      "checked={system.enableAutoScroll === true}",
+    );
+    expect(
+      systemSettings.indexOf('title={t("systemAutomationTitle")}'),
+    ).toBeLessThan(systemSettings.indexOf('name="enableAutoScroll"'));
+    expect(systemSettings.indexOf('name="enableAutoScroll"')).toBeLessThan(
+      systemSettings.indexOf('name="enableDestructiveToolConfirmation"'),
+    );
+    expect(en.System.autoScroll).toBe("Auto-scroll output");
+    expect(zh.System.autoScroll).toBe("自动输出滚动");
+    expect(ja.System.autoScroll).toBe("出力中に自動スクロール");
+    expect(en.System.autoImageCompression).toBe("Auto-compress images");
+    expect(zh.System.autoImageCompression).toBe("自动压缩图片");
+    expect(ja.System.autoImageCompression).toBe("画像を自動圧縮");
+    expect(en.System.imageCompressionAspectRatioNote).toContain(
+      "width is more than 5 times height",
+    );
+    expect(zh.System.imageCompressionAspectRatioNote).toContain(
+      "宽度超过高度 5 倍",
+    );
+    expect(ja.System.imageCompressionAspectRatioNote).toContain(
+      "幅が高さの 5 倍を超える",
+    );
     expect(en.System.systemInterfaceTitle).toBeTruthy();
     expect(zh.System.systemInterfaceTitle).toBeTruthy();
     expect(ja.System.systemInterfaceTitle).toBeTruthy();
